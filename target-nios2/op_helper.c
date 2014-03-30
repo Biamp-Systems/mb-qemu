@@ -33,25 +33,27 @@
 #define SHIFT 3
 #include "exec/softmmu_template.h"
 
-void tlb_fill(CPUNios2State *env, target_ulong addr, int is_write, int mmu_idx,
+void tlb_fill(CPUState *cs, target_ulong addr, int is_write, int mmu_idx,
               uintptr_t retaddr)
 {
     int ret;
 
-    ret = cpu_nios2_handle_mmu_fault(env, addr, is_write, mmu_idx, 1);
+    ret = cpu_nios2_handle_mmu_fault(cs, addr, is_write, mmu_idx, 1);
     if (unlikely(ret)) {
         if (retaddr) {
             /* now we have a real cpu fault */
-            cpu_restore_state(env, retaddr);
+            cpu_restore_state(cs, retaddr);
         }
-        cpu_loop_exit(env);
+        cpu_loop_exit(cs);
     }
 }
 
 void helper_raise_exception(CPUNios2State *env, uint32_t index)
 {
-    env->exception_index = index;
-    cpu_loop_exit(env);
+    CPUState *cs = CPU(nios2_env_get_cpu(env));
+
+    cs->exception_index = index;
+    cpu_loop_exit(cs);
 }
 
 uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)

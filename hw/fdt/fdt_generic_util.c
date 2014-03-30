@@ -44,7 +44,7 @@
 
 #include <libfdt.h>
 
-FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
+FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq cpu_irq)
 {
     char node_path[DT_PATH_LENGTH];
 
@@ -56,7 +56,7 @@ FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
     fdt_force_bind_all(fdti);
 
     /* parse the device tree */
-    if (!qemu_devtree_get_root_node(fdt, node_path)) {
+    if (!qemu_fdt_get_root_node(fdt, node_path)) {
         simple_bus_fdt_init(node_path, fdti, NULL);
         while (qemu_co_enter_next(fdti->cq));
     } else {
@@ -94,7 +94,7 @@ static void fdt_init_node(void *args)
     DB_PRINT("enter %d %s\n", this_entry, node_path);
 
     /* try instance binding first */
-    node_name = qemu_devtree_get_node_name(fdti->fdt, node_path);
+    node_name = qemu_fdt_get_node_name(fdti->fdt, node_path);
     if (!node_name) {
         fprintf(stderr, "FDT: ERROR: nameless node: %s\n", node_path);
     }
@@ -103,7 +103,7 @@ static void fdt_init_node(void *args)
     }
 
     /* fallback to compatibility binding */
-    all_compats = qemu_devtree_getprop(fdti->fdt, node_path,
+    all_compats = qemu_fdt_getprop(fdti->fdt, node_path,
         "compatible", &compat_len, false, NULL);
     if (!all_compats) {
         fprintf(stderr, "FDT: ERROR: no compatibility found for node %s/%s\n", node_path,
@@ -134,7 +134,7 @@ try_next_compat:
 invalidate:
     fprintf(stderr, "FDT: Unsupported peripheral invalidated %s compatibilities %s\n",
         node_name, all_compats);
-    qemu_devtree_setprop_string(fdti->fdt, node_path, "compatible",
+    qemu_fdt_setprop_string(fdti->fdt, node_path, "compatible",
         "invalidated");
 exit:
 
@@ -152,9 +152,8 @@ exit:
 int simple_bus_fdt_init(char *bus_node_path, FDTMachineInfo *fdti, void *unused)
 {
     int i;
-    int num_children = qemu_devtree_get_num_children(fdti->fdt, bus_node_path,
-                                                        1);
-    char **children = qemu_devtree_get_children(fdti->fdt, bus_node_path, 1);
+    int num_children = qemu_fdt_get_num_children(fdti->fdt, bus_node_path, 1);
+    char **children = qemu_fdt_get_children(fdti->fdt, bus_node_path, 1);
     int initialRoutinesPending = fdti->routinesPending;
 
     DB_PRINT("num child devices: %d\n", num_children);
@@ -186,21 +185,21 @@ qemu_irq fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
     if (!err) {
         err = &errl;
     }
-    intc_phandle = qemu_devtree_getprop_cell(fdt, node_path, "interrupt-parent",
+    intc_phandle = qemu_fdt_getprop_cell(fdt, node_path, "interrupt-parent",
                                                                 0, true, &errp);
     if (errp) {
         goto fail;
     }
 
-    if (qemu_devtree_get_node_by_phandle(fdt, intc_node_path, intc_phandle)) {
+    if (qemu_fdt_get_node_by_phandle(fdt, intc_node_path, intc_phandle)) {
         goto fail;
     }
-    intc_cells = qemu_devtree_getprop_cell(fdt, intc_node_path,
-                                           "#interrupt-cells", 0, false, &errp);
+    intc_cells = qemu_fdt_getprop_cell(fdt, intc_node_path,
+                                       "#interrupt-cells", 0, false, &errp);
     if (errp) {
         goto fail;
     }
-    idx = qemu_devtree_getprop_cell(fdt, node_path, "interrupts",
+    idx = qemu_fdt_getprop_cell(fdt, node_path, "interrupts",
                                         intc_cells * irq_idx, false, &errp);
     if (errp) {
         goto fail;
@@ -214,7 +213,7 @@ qemu_irq fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
         goto fail;
     }
     if (info) {
-        char *node_name = qemu_devtree_get_node_name(fdt, intc_node_path);
+        char *node_name = qemu_fdt_get_node_name(fdt, intc_node_path);
         sprintf(info, "%d (%s)", idx, node_name);
         g_free((void *)node_name);
     }
@@ -350,16 +349,16 @@ hwaddr fdt_get_parent_base(const char *node_path,
 {
     hwaddr base = fdti->sysbus_base;
     char parent[DT_PATH_LENGTH];
-    if (!qemu_devtree_getparent(fdti->fdt, parent, node_path)) {
+    if (!qemu_fdt_getparent(fdti->fdt, parent, node_path)) {
         do {
             Error *errp = NULL;
             int64_t parent_base = 0;
-            parent_base = qemu_devtree_getprop_cell(fdti->fdt, parent, "reg",
+            parent_base = qemu_fdt_getprop_cell(fdti->fdt, parent, "reg",
                                                     0, false, &errp);
             if (errp == NULL) {
                 base += (hwaddr)parent_base;
             }
-        } while (!qemu_devtree_getparent(fdti->fdt, parent, parent));
+        } while (!qemu_fdt_getparent(fdti->fdt, parent, parent));
     }
 
     return base;
@@ -374,7 +373,6 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
     DeviceState *dev;
     char *dev_type = NULL;
     int is_intc;
-    Error *errp = NULL;
     int i;
 
     dev = fdt_create_qdev_from_compat(compat, &dev_type);
@@ -384,7 +382,7 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
     }
     /* FIXME: attach to the sysbus instead */
     object_property_add_child(container_get(qdev_get_machine(), "/unattached"),
-                              qemu_devtree_get_node_name(fdti->fdt, node_path),
+                              qemu_fdt_get_node_name(fdti->fdt, node_path),
                               OBJECT(dev), NULL);
 
     fdt_init_set_opaque(fdti, node_path, dev);
@@ -424,21 +422,19 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
             uint64_t offset = (!strcmp(propname, "reg")) ?
                               fdt_get_parent_base(node_path, fdti) : 0;
             object_property_set_int(OBJECT(dev), get_int_be(val, len) + offset,
-                                    propname, &errp);
-            assert_no_error(errp);
+                                    propname, &error_abort);
             DB_PRINT("set property %s to %#llx\n", propname,
                                             (long long unsigned int)get_int_be(val, len));
         } else if (!strcmp(p->type, "bool")) {
             object_property_set_bool(OBJECT(dev), !!get_int_be(val, len),
-                        propname, &errp);
-            assert_no_error(errp);
+                        propname, &error_abort);
             DB_PRINT("set property %s to %#llx\n", propname,
                                             (long long unsigned int)get_int_be(val, len));
         } else if (!strncmp(p->type, "link", 4)) {
             char target_node_path[DT_PATH_LENGTH];
             DeviceState *linked_dev;
 
-            if (qemu_devtree_get_node_by_phandle(fdti->fdt, target_node_path,
+            if (qemu_fdt_get_node_by_phandle(fdti->fdt, target_node_path,
                                                 get_int_be(val, len))) {
                 abort();
             }
@@ -447,18 +443,15 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
             }
             linked_dev = fdt_init_get_opaque(fdti, target_node_path);
             object_property_set_link(OBJECT(dev), OBJECT(linked_dev), propname,
-                                        &errp);
-            assert_no_error(errp);
+                                        &error_abort);
         } else if (!strcmp(p->type, "string")) {
-            object_property_set_str(OBJECT(dev), strndup(val, len), propname, &errp);
+            object_property_set_str(OBJECT(dev), strndup(val, len), propname, &error_abort);
 	}
     }
 
     qdev_init_nofail(dev);
     /* map slave attachment */
-    base = qemu_devtree_getprop_cell(fdti->fdt, node_path, "reg", 0, false,
-                                                                    &errp);
-    assert_no_error(errp);
+    base = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", 0, false, &error_abort);
 
     base += fdt_get_parent_base(node_path, fdti);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
@@ -476,7 +469,7 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
         irq = fdt_get_irq_info(fdti, node_path, i, &err, irq_info);
         /* INTCs inferr their top level, if no IRQ connection specified */
         if (err && is_intc) {
-            irq = fdti->irq_base[0];
+            irq = fdti->irq_base;
             sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
             fprintf(stderr, "FDT: (%s) connected top level irq %s\n", dev_type,
                         irq_info);

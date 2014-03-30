@@ -69,6 +69,9 @@ typedef struct Nios2CPUClass {
 
 #define ELF_MACHINE EM_ALTERA_NIOS2
 
+/* Main interrupt line */
+#define NIOS2_CPU_IRQ 0
+
 /* GP regs + CR regs + PC */
 #define NUM_CORE_REGS (32 + 32 + 1)
 
@@ -246,9 +249,8 @@ static inline int cpu_mmu_index(CPUNios2State *env)
                                                   MMU_SUPERVISOR_IDX;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUNios2State *env, target_ulong address,
+int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
                                int rw, int mmu_idx, int is_softmmu);
-#define cpu_handle_mmu_fault cpu_nios2_handle_mmu_fault
 
 #if defined(CONFIG_USER_ONLY)
 static inline void cpu_clone_regs(CPUNios2State *env, target_ulong newsp)
@@ -282,11 +284,6 @@ static inline void cpu_get_tb_cpu_state(CPUNios2State *env, target_ulong *pc,
     *pc = env->regs[R_PC];
     *cs_base = 0;
     *flags = (env->regs[CR_STATUS] & (CR_STATUS_EH | CR_STATUS_U));
-}
-
-static inline bool cpu_has_work(CPUState *cpu)
-{
-    return cpu->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
 #include "exec/exec-all.h"

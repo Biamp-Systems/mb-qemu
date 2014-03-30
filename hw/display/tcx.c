@@ -25,7 +25,11 @@
 #include "qemu-common.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
+#include "hw/loader.h"
 #include "hw/sysbus.h"
+
+#define TCX_ROM_FILE "QEMU,tcx.bin"
+#define FCODE_MAX_ROM_SIZE 0x10000
 
 #define MAXX 1024
 #define MAXY 768
@@ -43,6 +47,8 @@ typedef struct TCXState {
     QemuConsole *con;
     uint8_t *vram;
     uint32_t *vram24, *cplane;
+    hwaddr prom_addr;
+    MemoryRegion rom;
     MemoryRegion vram_mem;
     MemoryRegion vram_8bit;
     MemoryRegion vram_24bit;
@@ -529,13 +535,30 @@ static int tcx_init1(SysBusDevice *dev)
 {
     TCXState *s = TCX(dev);
     ram_addr_t vram_offset = 0;
-    int size;
+    int size, ret;
     uint8_t *vram_base;
+    char *fcode_filename;
 
     memory_region_init_ram(&s->vram_mem, OBJECT(s), "tcx.vram",
                            s->vram_size * (1 + 4 + 4));
     vmstate_register_ram_global(&s->vram_mem);
     vram_base = memory_region_get_ram_ptr(&s->vram_mem);
+
+    /* FCode ROM */
+    memory_region_init_ram(&s->rom, NULL, "tcx.prom", FCODE_MAX_ROM_SIZE);
+    vmstate_register_ram_global(&s->rom);
+    memory_region_set_readonly(&s->rom, true);
+    sysbus_init_mmio(dev, &s->rom);
+
+    fcode_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, TCX_ROM_FILE);
+    if (fcode_filename) {
+        ret = load_image_targphys(fcode_filename, s->prom_addr,
+                                  FCODE_MAX_ROM_SIZE);
+        if (ret < 0 || ret > FCODE_MAX_ROM_SIZE) {
+            fprintf(stderr, "tcx: could not load prom '%s'\n", TCX_ROM_FILE);
+            return -1;
+        }
+    }
 
     /* 8-bit plane */
     s->vram = vram_base;
@@ -579,14 +602,14 @@ static int tcx_init1(SysBusDevice *dev)
                                  &s->vram_mem, vram_offset, size);
         sysbus_init_mmio(dev, &s->vram_cplane);
 
-        s->con = graphic_console_init(DEVICE(dev), &tcx24_ops, s);
+        s->con = graphic_console_init(DEVICE(dev), 0, &tcx24_ops, s);
     } else {
         /* THC 8 bit (dummy) */
         memory_region_init_io(&s->thc8, OBJECT(s), &dummy_ops, s, "tcx.thc8",
                               TCX_THC_NREGS_8);
         sysbus_init_mmio(dev, &s->thc8);
 
-        s->con = graphic_console_init(DEVICE(dev), &tcx_ops, s);
+        s->con = graphic_console_init(DEVICE(dev), 0, &tcx_ops, s);
     }
 
     qemu_console_resize(s->con, s->width, s->height);
@@ -594,10 +617,11 @@ static int tcx_init1(SysBusDevice *dev)
 }
 
 static Property tcx_properties[] = {
-    DEFINE_PROP_HEX32("vram_size", TCXState, vram_size, -1),
+    DEFINE_PROP_UINT32("vram_size", TCXState, vram_size, -1),
     DEFINE_PROP_UINT16("width",    TCXState, width,     -1),
     DEFINE_PROP_UINT16("height",   TCXState, height,    -1),
     DEFINE_PROP_UINT16("depth",    TCXState, depth,     -1),
+    DEFINE_PROP_UINT64("prom_addr", TCXState, prom_addr, -1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

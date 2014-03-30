@@ -340,11 +340,11 @@ typedef enum QCow2MetadataOverlap {
 #define QCOW2_OL_ALL \
     (QCOW2_OL_CACHED | QCOW2_OL_INACTIVE_L2)
 
-#define L1E_OFFSET_MASK 0x00ffffffffffff00ULL
-#define L2E_OFFSET_MASK 0x00ffffffffffff00ULL
+#define L1E_OFFSET_MASK 0x00fffffffffffe00ULL
+#define L2E_OFFSET_MASK 0x00fffffffffffe00ULL
 #define L2E_COMPRESSED_OFFSET_SIZE_MASK 0x3fffffffffffffffULL
 
-#define REFT_OFFSET_MASK 0xffffffffffffff00ULL
+#define REFT_OFFSET_MASK 0xfffffffffffffe00ULL
 
 static inline int64_t start_of_cluster(BDRVQcowState *s, int64_t offset)
 {
@@ -468,7 +468,7 @@ void qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
 int qcow2_get_cluster_offset(BlockDriverState *bs, uint64_t offset,
     int *num, uint64_t *cluster_offset);
 int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
-    int n_start, int n_end, int *num, uint64_t *host_offset, QCowL2Meta **m);
+    int *num, uint64_t *host_offset, QCowL2Meta **m);
 uint64_t qcow2_alloc_compressed_cluster_offset(BlockDriverState *bs,
                                          uint64_t offset,
                                          int compressed_size);
@@ -488,7 +488,10 @@ int qcow2_snapshot_delete(BlockDriverState *bs,
                           const char *name,
                           Error **errp);
 int qcow2_snapshot_list(BlockDriverState *bs, QEMUSnapshotInfo **psn_tab);
-int qcow2_snapshot_load_tmp(BlockDriverState *bs, const char *snapshot_name);
+int qcow2_snapshot_load_tmp(BlockDriverState *bs,
+                            const char *snapshot_id,
+                            const char *name,
+                            Error **errp);
 
 void qcow2_free_snapshots(BlockDriverState *bs);
 int qcow2_read_snapshots(BlockDriverState *bs);

@@ -38,10 +38,9 @@
 #include "hw/fdt/fdt_generic_util.h"
 #include "hw/fdt/fdt_generic_devices.h"
 
-#include "pic_cpu.h"
 #include "boot.h"
 
-#define VAL(name) qemu_devtree_getprop_cell(fdt, node_path, name, 0, false, \
+#define VAL(name) qemu_fdt_getprop_cell(fdt, node_path, name, 0, false, \
                                                 NULL)
 
 static void
@@ -50,7 +49,7 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
     CPUMBState *env = &cpu->env;
 
     char node_path[DT_PATH_LENGTH];
-    qemu_devtree_get_node_by_name(fdt, node_path, "cpu@");
+    qemu_fdt_get_node_by_name(fdt, node_path, "cpu@");
     int t;
     int use_exc = 0;
 
@@ -190,7 +189,7 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
         };
         unsigned int i = 0;
 
-        str = qemu_devtree_getprop(fdt, node_path, "xlnx,family", NULL,
+        str = qemu_fdt_getprop(fdt, node_path, "xlnx,family", NULL,
                                     false, NULL);
         while (arch_lookup[i].name && str) {
             if (strcmp(arch_lookup[i].name, str) == 0) {
@@ -242,7 +241,7 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
         };
         unsigned int i = 0;
 
-        str = qemu_devtree_getprop(fdt, node_path, "model", NULL, false, NULL);
+        str = qemu_fdt_getprop(fdt, node_path, "model", NULL, false, NULL);
 
         while (cpu_lookup[i].name && str) {
             if (strcmp(cpu_lookup[i].name, str + strlen("microblaze,")) == 0) {
@@ -300,7 +299,6 @@ static void microblaze_generic_fdt_init(QEMUMachineInitArgs *args)
     void *fdt = NULL;
     const char *dtb_arg;
     QemuOpts *machine_opts;
-    Error *errp = NULL;
 
     /* for memory node */
     char node_path[DT_PATH_LENGTH];
@@ -328,12 +326,11 @@ static void microblaze_generic_fdt_init(QEMUMachineInitArgs *args)
 
     /* find memory node */
     /* FIXME it could be good to fix case when you don't find memory node */
-    qemu_devtree_get_node_by_name(fdt, node_path, "memory@");
-    ram_base = qemu_devtree_getprop_cell(fdt, node_path, "reg", 0,
-                                            false, &errp);
-    ram_size = qemu_devtree_getprop_cell(fdt, node_path, "reg", 1,
-                                            false, &errp);
-    assert_no_error(errp);
+    qemu_fdt_get_node_by_name(fdt, node_path, "memory@");
+    ram_base = qemu_fdt_getprop_cell(fdt, node_path, "reg", 0,
+                                            false, &error_abort);
+    ram_size = qemu_fdt_getprop_cell(fdt, node_path, "reg", 1,
+                                            false, &error_abort);
 
     /* FIXME: instantiate from FDT like evrything else */
     /* Attach emulated BRAM through the LMB.  */
@@ -347,7 +344,8 @@ static void microblaze_generic_fdt_init(QEMUMachineInitArgs *args)
 
     /* Instantiate peripherals from the FDT.  */
     fdt_init_destroy_fdti(
-        fdt_generic_create_machine(fdt, microblaze_pic_init_cpu(&cpu->env)));
+        fdt_generic_create_machine(fdt,
+                            qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ)));
 
     microblaze_load_kernel(cpu, ram_base, ram_size,
                            args->initrd_filename,

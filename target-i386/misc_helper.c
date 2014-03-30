@@ -155,7 +155,7 @@ target_ulong helper_read_crN(CPUX86State *env, int reg)
         break;
     case 8:
         if (!(env->hflags2 & HF2_VINTR_MASK)) {
-            val = cpu_get_apic_tpr(env->apic_state);
+            val = cpu_get_apic_tpr(x86_env_get_cpu(env)->apic_state);
         } else {
             val = env->v_tpr;
         }
@@ -179,7 +179,7 @@ void helper_write_crN(CPUX86State *env, int reg, target_ulong t0)
         break;
     case 8:
         if (!(env->hflags2 & HF2_VINTR_MASK)) {
-            cpu_set_apic_tpr(env->apic_state, t0);
+            cpu_set_apic_tpr(x86_env_get_cpu(env)->apic_state, t0);
         }
         env->v_tpr = t0 & 0x0f;
         break;
@@ -221,8 +221,10 @@ void helper_lmsw(CPUX86State *env, target_ulong t0)
 
 void helper_invlpg(CPUX86State *env, target_ulong addr)
 {
+    X86CPU *cpu = x86_env_get_cpu(env);
+
     cpu_svm_check_intercept_param(env, SVM_EXIT_INVLPG, 0);
-    tlb_flush_page(env, addr);
+    tlb_flush_page(CPU(cpu), addr);
 }
 
 void helper_rdtsc(CPUX86State *env)
@@ -286,7 +288,7 @@ void helper_wrmsr(CPUX86State *env)
         env->sysenter_eip = val;
         break;
     case MSR_IA32_APICBASE:
-        cpu_set_apic_base(env->apic_state, val);
+        cpu_set_apic_base(x86_env_get_cpu(env)->apic_state, val);
         break;
     case MSR_EFER:
         {
@@ -437,7 +439,7 @@ void helper_rdmsr(CPUX86State *env)
         val = env->sysenter_eip;
         break;
     case MSR_IA32_APICBASE:
-        val = cpu_get_apic_base(env->apic_state);
+        val = cpu_get_apic_base(x86_env_get_cpu(env)->apic_state);
         break;
     case MSR_EFER:
         val = env->efer;
@@ -566,6 +568,15 @@ void helper_rdmsr(CPUX86State *env)
 }
 #endif
 
+static void do_pause(X86CPU *cpu)
+{
+    CPUState *cs = CPU(cpu);
+
+    /* Just let another CPU run.  */
+    cs->exception_index = EXCP_INTERRUPT;
+    cpu_loop_exit(cs);
+}
+
 static void do_hlt(X86CPU *cpu)
 {
     CPUState *cs = CPU(cpu);
@@ -573,8 +584,8 @@ static void do_hlt(X86CPU *cpu)
 
     env->hflags &= ~HF_INHIBIT_IRQ_MASK; /* needed if sti is just before */
     cs->halted = 1;
-    env->exception_index = EXCP_HLT;
-    cpu_loop_exit(env);
+    cs->exception_index = EXCP_HLT;
+    cpu_loop_exit(cs);
 }
 
 void helper_hlt(CPUX86State *env, int next_eip_addend)
@@ -611,15 +622,26 @@ void helper_mwait(CPUX86State *env, int next_eip_addend)
     cs = CPU(cpu);
     /* XXX: not complete but not completely erroneous */
     if (cs->cpu_index != 0 || CPU_NEXT(cs) != NULL) {
-        /* more than one CPU: do not sleep because another CPU may
-           wake this one */
+        do_pause(cpu);
     } else {
         do_hlt(cpu);
     }
 }
 
+void helper_pause(CPUX86State *env, int next_eip_addend)
+{
+    X86CPU *cpu = x86_env_get_cpu(env);
+
+    cpu_svm_check_intercept_param(env, SVM_EXIT_PAUSE, 0);
+    env->eip += next_eip_addend;
+
+    do_pause(cpu);
+}
+
 void helper_debug(CPUX86State *env)
 {
-    env->exception_index = EXCP_DEBUG;
-    cpu_loop_exit(env);
+    CPUState *cs = CPU(x86_env_get_cpu(env));
+
+    cs->exception_index = EXCP_DEBUG;
+    cpu_loop_exit(cs);
 }

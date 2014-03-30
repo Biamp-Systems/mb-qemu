@@ -37,11 +37,11 @@ void nios2_cpu_do_interrupt(CPUState *cs)
     env->regs[R_EA] = env->regs[R_PC] + 4;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUNios2State *env, target_ulong address,
+int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
                                int rw, int mmu_idx, int is_softmmu)
 {
-    env->exception_index = 0xaa;
-    cpu_dump_state(env, stderr, fprintf, 0);
+    cs->exception_index = 0xaa;
+    cpu_dump_state(cs, stderr, fprintf, 0);
     return 1;
 }
 
@@ -54,7 +54,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
     Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
 
-    switch (env->exception_index) {
+    switch (cs->exception_index) {
     case EXCP_IRQ:
         assert(env->regs[CR_STATUS] & CR_STATUS_PIE);
 
@@ -65,7 +65,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-        env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+        env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         env->regs[R_EA] = env->regs[R_PC] + 4;
         env->regs[R_PC] = env->exception_addr;
@@ -86,7 +86,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
             env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
             env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-            env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+            env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
             env->regs[CR_TLBMISC] &= ~CR_TLBMISC_DBL;
             env->regs[CR_TLBMISC] |= CR_TLBMISC_WR;
@@ -102,7 +102,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
             env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
             env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-            env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+            env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
             env->regs[CR_TLBMISC] |= CR_TLBMISC_DBL;
 
@@ -121,7 +121,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-        env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+        env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         if ((env->regs[CR_STATUS] & CR_STATUS_EH) == 0) {
             env->regs[CR_TLBMISC] |= CR_TLBMISC_WR;
@@ -146,7 +146,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-        env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+        env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         env->regs[R_PC] = env->exception_addr;
         break;
@@ -165,7 +165,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-        env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+        env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         env->regs[R_PC] = env->exception_addr;
         break;
@@ -180,21 +180,24 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
-        env->regs[CR_EXCEPTION] |= (env->exception_index & 0x1F) << 2;
+        env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         env->regs[R_PC] = env->exception_addr;
         break;
 
     default:
-        cpu_abort(env, "unhandled exception type=%d\n",
-                  env->exception_index);
+        cpu_abort(cs, "unhandled exception type=%d\n",
+                  cs->exception_index);
         break;
     }
 }
 
 static int cpu_nios2_handle_virtual_page(
-    CPUNios2State *env, target_ulong address, int rw, int mmu_idx)
+    CPUState *cs, target_ulong address, int rw, int mmu_idx)
 {
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUNios2State *env = &cpu->env;
+
     target_ulong vaddr, paddr;
     Nios2MMULookup lu;
     unsigned int hit;
@@ -207,17 +210,17 @@ static int cpu_nios2_handle_virtual_page(
             ((rw == 1) && (lu.prot & PAGE_WRITE)) ||
             ((rw == 2) && (lu.prot & PAGE_EXEC))) {
 
-            tlb_set_page(env, vaddr, paddr, lu.prot,
+            tlb_set_page(cs, vaddr, paddr, lu.prot,
                          mmu_idx, TARGET_PAGE_SIZE);
             return 0;
         } else {
             /* Permission violation */
-            env->exception_index = (rw == 0) ? EXCP_TLBR :
+            cs->exception_index = (rw == 0) ? EXCP_TLBR :
                                                ((rw == 1) ? EXCP_TLBW :
                                                             EXCP_TLBX);
         }
     } else {
-        env->exception_index = EXCP_TLBD;
+        cs->exception_index = EXCP_TLBD;
     }
 
     if (rw == 2) {
@@ -232,38 +235,41 @@ static int cpu_nios2_handle_virtual_page(
     return 1;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUNios2State *env, target_ulong address,
+int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
                                int rw, int mmu_idx, int is_softmmu)
 {
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUNios2State *env = &cpu->env;
+
     if (has_mmu) {
         if (MMU_SUPERVISOR_IDX == mmu_idx) {
             if (address >= 0xC0000000) {
                 /* Kernel physical page - TLB bypassed */
                 address &= TARGET_PAGE_MASK;
-                tlb_set_page(env, address, address, PAGE_BITS,
+                tlb_set_page(cs, address, address, PAGE_BITS,
                              mmu_idx, TARGET_PAGE_SIZE);
             } else if (address >= 0x80000000) {
                 /* Kernel virtual page */
-                return cpu_nios2_handle_virtual_page(env, address, rw, mmu_idx);
+                return cpu_nios2_handle_virtual_page(cs, address, rw, mmu_idx);
             } else {
                 /* User virtual page */
-                return cpu_nios2_handle_virtual_page(env, address, rw, mmu_idx);
+                return cpu_nios2_handle_virtual_page(cs, address, rw, mmu_idx);
             }
         } else {
             if (address >= 0x80000000) {
                 /* Illegal access from user mode */
-                env->exception_index = EXCP_SUPERA;
+                cs->exception_index = EXCP_SUPERA;
                 env->regs[CR_BADADDR] = address;
                 return 1;
             } else {
                 /* User virtual page */
-                return cpu_nios2_handle_virtual_page(env, address, rw, mmu_idx);
+                return cpu_nios2_handle_virtual_page(cs, address, rw, mmu_idx);
             }
         }
     } else {
         /* No MMU */
         address &= TARGET_PAGE_MASK;
-        tlb_set_page(env, address, address, PAGE_BITS,
+        tlb_set_page(cs, address, address, PAGE_BITS,
                      mmu_idx, TARGET_PAGE_SIZE);
     }
 

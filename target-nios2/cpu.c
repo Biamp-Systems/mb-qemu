@@ -30,11 +30,31 @@ static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
     env->regs[R_PC] = value;
 }
 
+static bool nios2_cpu_has_work(CPUState *cpu)
+{
+    return cpu->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
+}
+
+#ifndef CONFIG_USER_ONLY
+static void nios2_cpu_set_irq(void *opaque, int irq, int level)
+{
+    Nios2CPU *cpu = opaque;
+    CPUState *cs = CPU(cpu);
+    int type = irq ? CPU_INTERRUPT_NMI : CPU_INTERRUPT_HARD;
+
+    if (level) {
+        cpu_interrupt(cs, type);
+    } else {
+        cpu_reset_interrupt(cs, type);
+    }
+}
+#endif
+
 /* CPUClass::reset() */
 static void nios2_cpu_reset(CPUState *cs)
 {
     Nios2CPU *cpu = NIOS2_CPU(cs);
-    Nios2CPUClass *mcc = NIOS2_CPU_GET_CLASS(cpu);
+    Nios2CPUClass *ncc = NIOS2_CPU_GET_CLASS(cpu);
     CPUNios2State *env = &cpu->env;
 
     if (qemu_loglevel_mask(CPU_LOG_RESET)) {
@@ -42,9 +62,9 @@ static void nios2_cpu_reset(CPUState *cs)
         log_cpu_state(cs, 0);
     }
 
-    mcc->parent_reset(cs);
+    ncc->parent_reset(cs);
 
-    tlb_flush(env, 1);
+    tlb_flush(cs, 1);
 
     memset(env->regs, 0, sizeof(uint32_t) * NUM_CORE_REGS);
     env->regs[R_PC] = env->reset_addr;
@@ -65,19 +85,28 @@ static void nios2_cpu_initfn(Object *obj)
 
     cs->env_ptr = env;
     cpu_exec_init(env);
+
+#ifndef CONFIG_USER_ONLY
+    /* Inbound IRQ line */
+    qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 1);
+#endif
+
 }
 
 static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 {
     CPUClass *cc = CPU_CLASS(oc);
-    Nios2CPUClass *mcc = NIOS2_CPU_CLASS(oc);
+    Nios2CPUClass *ncc = NIOS2_CPU_CLASS(oc);
 
-    mcc->parent_reset = cc->reset;
+    ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
+    cc->has_work = nios2_cpu_has_work;
     cc->do_interrupt = nios2_cpu_do_interrupt;
     cc->dump_state = nios2_cpu_dump_state;
     cc->set_pc = nios2_cpu_set_pc;
-#ifndef CONFIG_USER_ONLY
+#ifdef CONFIG_USER_ONLY
+    cc->handle_mmu_fault = mb_cpu_handle_mmu_fault;
+#else
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
 #endif
 }

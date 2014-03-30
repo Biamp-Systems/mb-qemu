@@ -118,7 +118,7 @@ static int labx_load_device_tree(hwaddr addr,
     }
 
     if (kernel_cmdline && strlen(kernel_cmdline)) {
-        r = qemu_devtree_setprop_string(fdt, "/chosen", "bootargs",
+        r = qemu_fdt_setprop_string(fdt, "/chosen", "bootargs",
                                         kernel_cmdline);
         if (r < 0) {
             fprintf(stderr, "couldn't set /chosen/bootargs\n");
@@ -139,10 +139,10 @@ static ram_addr_t get_dram_base(void *fdt)
     Error *errp = NULL;
 
     printf("DRAM base %08X, size %08X\n",
-        qemu_devtree_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
-        qemu_devtree_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
 
-    return qemu_devtree_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
+    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
 }
 
 typedef void (*device_init_func_t)(FDTMachineInfo *fdti, const char *node_path, uint32_t offset);
@@ -170,37 +170,37 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
 
 #if 0 /* TODO: Finish off the vectored-interrupt-controller */
     int reglen;
-    const void *reg = qemu_devtree_getprop_offset(fdt, node, "reg", &reglen);
-    uint32_t irq_addr = qemu_devtree_int_array_index(reg, 0) + offset;
+    const void *reg = qemu_fdt_getprop_offset(fdt, node, "reg", &reglen);
+    uint32_t irq_addr = qemu_fdt_int_array_index(reg, 0) + offset;
     int nrIrqLen;
     const void *nrIrq =
-        qemu_devtree_getprop_offset(fdt, node, "ALTR,num-intr-inputs",
+        qemu_fdt_getprop_offset(fdt, node, "ALTR,num-intr-inputs",
                                     &nrIrqLen);
-    uint32_t nrIrqs = qemu_devtree_int_array_index(nrIrq, 0);
+    uint32_t nrIrqs = qemu_fdt_int_array_index(nrIrq, 0);
 
     printf("  IRQ BASE %08X NIRQS %d\n", irq_addr, nrIrqs);
 
-    fdti->irq_base = nios2_pic_init_cpu(env);
-    dev = altera_vic_create(irq_addr, fdti->irq_base[0], 2);
+    fdti->irq_base = qdev_get_gpio_in(DEVICE(cpu), NIOS2_CPU_IRQ);
+    dev = altera_vic_create(irq_addr, fdti->irq_base, 2);
 #else
     /* Internal interrupt controller (IIC) */
-    fdti->irq_base = nios2_pic_init_cpu(cpu);
-    dev = altera_iic_create(cpu, fdti->irq_base[0], 2);
+    fdti->irq_base = qdev_get_gpio_in(DEVICE(cpu), NIOS2_CPU_IRQ);
+    dev = altera_iic_create(cpu, fdti->irq_base, 2);
 #endif
 
     /* TODO: use the entrypoint of the passed in elf file or
        the device-tree one */
 #if 0
     cpu->env.reset_addr =
-        qemu_devtree_getprop_cell(fdt, node_path, "ALTR,reset-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdt, node_path, "ALTR,reset-addr", 0, 0, &errp);
 #else
     cpu->env.reset_addr = 0xc0000000;
 #endif
 
     cpu->env.exception_addr =
-        qemu_devtree_getprop_cell(fdti->fdt, node_path, "ALTR,exception-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,exception-addr", 0, 0, &errp);
     cpu->env.fast_tlb_miss_addr =
-        qemu_devtree_getprop_cell(fdti->fdt, node_path, "ALTR,fast-tlb-miss-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,fast-tlb-miss-addr", 0, 0, &errp);
 
     /* reset again to use the new reset vector */
     cpu_reset(CPU(cpu));
@@ -260,8 +260,8 @@ static int sopc_device_probe(FDTMachineInfo *fdti, const char *node_path, int pa
 
 static int cpus_probe(char *node_path, FDTMachineInfo *fdti, void *opaque)
 {
-    int num_children = qemu_devtree_get_num_children(fdti->fdt, "/cpus", 1);
-    char **children = qemu_devtree_get_children(fdti->fdt, "/cpus", 1);
+    int num_children = qemu_fdt_get_num_children(fdti->fdt, "/cpus", 1);
+    char **children = qemu_fdt_get_children(fdti->fdt, "/cpus", 1);
     int i;
 
     for (i = 0; i < num_children; i++) {

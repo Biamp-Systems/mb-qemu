@@ -26,6 +26,7 @@
 #include "hw/ppc/ppc_e500.h"
 #include "qemu/timer.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/cpus.h"
 #include "hw/timer/m48t59.h"
 #include "qemu/log.h"
 #include "hw/loader.h"
@@ -684,7 +685,7 @@ static inline void cpu_ppc_hdecr_excp(PowerPCCPU *cpu)
 }
 
 static void __cpu_ppc_store_decr(PowerPCCPU *cpu, uint64_t *nextp,
-                                 struct QEMUTimer *timer,
+                                 QEMUTimer *timer,
                                  void (*raise_excp)(PowerPCCPU *),
                                  uint32_t decr, uint32_t value,
                                  int is_excp)
@@ -856,9 +857,9 @@ typedef struct ppc40x_timer_t ppc40x_timer_t;
 struct ppc40x_timer_t {
     uint64_t pit_reload;  /* PIT auto-reload value        */
     uint64_t fit_next;    /* Tick for next FIT interrupt  */
-    struct QEMUTimer *fit_timer;
+    QEMUTimer *fit_timer;
     uint64_t wdt_next;    /* Tick for next WDT interrupt  */
-    struct QEMUTimer *wdt_timer;
+    QEMUTimer *wdt_timer;
 
     /* 405 have the PIT, 440 have a DECR.  */
     unsigned int decr_excp;
@@ -1001,7 +1002,7 @@ static void cpu_4xx_wdt_cb (void *opaque)
     case 0x1:
         timer_mod(ppc40x_timer->wdt_timer, next);
         ppc40x_timer->wdt_next = next;
-        env->spr[SPR_40x_TSR] |= 1 << 31;
+        env->spr[SPR_40x_TSR] |= 1U << 31;
         break;
     case 0x2:
         timer_mod(ppc40x_timer->wdt_timer, next);
@@ -1361,4 +1362,25 @@ int PPC_NVRAM_set_params (nvram_t *nvram, uint16_t NVRAM_size,
     NVRAM_set_word(nvram,   0xFC, crc);
 
     return 0;
+}
+
+/* CPU device-tree ID helpers */
+int ppc_get_vcpu_dt_id(PowerPCCPU *cpu)
+{
+    return cpu->cpu_dt_id;
+}
+
+PowerPCCPU *ppc_get_vcpu_by_dt_id(int cpu_dt_id)
+{
+    CPUState *cs;
+
+    CPU_FOREACH(cs) {
+        PowerPCCPU *cpu = POWERPC_CPU(cs);
+
+        if (cpu->cpu_dt_id == cpu_dt_id) {
+            return cpu;
+        }
+    }
+
+    return NULL;
 }

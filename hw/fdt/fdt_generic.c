@@ -201,7 +201,7 @@ FDTMachineInfo *fdt_init_new_fdti(void *fdt)
     fdti->cq = g_malloc0(sizeof(*(fdti->cq)));
     qemu_co_queue_init(fdti->cq);
     fdti->dev_opaques = g_malloc0(sizeof(*(fdti->dev_opaques)) *
-        (devtree_get_num_nodes(fdt) + 1));
+        (fdt_get_num_nodes(fdt) + 1));
     return fdti;
 }
 

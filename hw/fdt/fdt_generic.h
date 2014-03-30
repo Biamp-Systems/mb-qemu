@@ -20,7 +20,7 @@ typedef struct FDTMachineInfo {
     /* the fdt blob */
     void *fdt;
     /* irq descriptors for top level int controller */
-    qemu_irq *irq_base;
+    qemu_irq irq_base;
     /* per-device specific opaques */
     FDTDevOpaque *dev_opaques;
 

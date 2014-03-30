@@ -33,7 +33,6 @@
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
-#include "pic_cpu.h"
 
 #include "hw/fdt/fdt_generic.h"
 #include "hw/fdt/fdt_generic_devices.h"
@@ -117,7 +116,7 @@ static int labx_microblaze_load_device_tree(hwaddr addr,
     }
 
     if (kernel_cmdline && strlen(kernel_cmdline)) {
-        r = qemu_devtree_setprop_string(fdt, "/chosen", "bootargs",
+        r = qemu_fdt_setprop_string(fdt, "/chosen", "bootargs",
                                         kernel_cmdline);
         if (r < 0) {
             fprintf(stderr, "couldn't set /chosen/bootargs\n");
@@ -138,10 +137,10 @@ static ram_addr_t get_dram_base(void *fdt)
     Error *errp = NULL;
      
     printf("DRAM base %08X, size %08X\n",
-        qemu_devtree_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
-        qemu_devtree_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
      
-    return qemu_devtree_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
+    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
 }
 
 /*
@@ -159,7 +158,6 @@ static void labx_microblaze_init(QEMUMachineInitArgs *args)
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
     MicroBlazeCPU *cpu;
     CPUMBState *env;
-    qemu_irq *cpu_irq;
 
 
     /* init CPUs */
@@ -168,7 +166,6 @@ static void labx_microblaze_init(QEMUMachineInitArgs *args)
     }
     cpu = cpu_mb_init(args->cpu_model);
     env = &cpu->env;
-    cpu_irq = microblaze_pic_init_cpu(env);
 
     env->pvr.regs[10] = 0x0c000000; /* spartan 3a dsp family.  */
     qemu_register_reset(main_cpu_reset, cpu);
@@ -185,7 +182,8 @@ static void labx_microblaze_init(QEMUMachineInitArgs *args)
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
 
     /* Create other devices listed in the device-tree */
-    fdt_init_destroy_fdti(fdt_generic_create_machine(fdt, cpu_irq));
+    fdt_init_destroy_fdti(fdt_generic_create_machine(fdt,
+                            qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ)));
 
     if (args->kernel_filename) {
         uint64_t entry, low, high;

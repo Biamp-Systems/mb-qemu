@@ -9,7 +9,7 @@
  * destroying the returned FDTMachineInfo (using fdt_init_destroy_fdti)
  */
 
-FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq);
+FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq cpu_irq);
 
 /* fdt init a simple bus. Search the bus for child nodes and instantiate or
  * invalidate devices as appropriate. Conformant to FDTInitFn prototype, i.e.

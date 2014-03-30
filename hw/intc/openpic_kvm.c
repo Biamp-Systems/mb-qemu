@@ -200,7 +200,7 @@ static void kvm_openpic_realize(DeviceState *dev, Error **errp)
     qdev_init_gpio_in(dev, kvm_openpic_set_irq, OPENPIC_MAX_IRQ);
 
     opp->mem_listener.region_add = kvm_openpic_region_add;
-    opp->mem_listener.region_add = kvm_openpic_region_del;
+    opp->mem_listener.region_del = kvm_openpic_region_del;
     memory_listener_register(&opp->mem_listener, &address_space_memory);
 
     /* indicate pic capabilities */
@@ -228,7 +228,7 @@ int kvm_openpic_connect_vcpu(DeviceState *d, CPUState *cs)
 
     encap.cap = KVM_CAP_IRQ_MPIC;
     encap.args[0] = opp->fd;
-    encap.args[1] = cs->cpu_index;
+    encap.args[1] = kvm_arch_vcpu_id(cs);
 
     return kvm_vcpu_ioctl(cs, KVM_ENABLE_CAP, &encap);
 }
