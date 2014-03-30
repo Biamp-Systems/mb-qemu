@@ -222,7 +222,7 @@ static Property labx_dma_properties[] = {
     DEFINE_PROP_UINT32("param-words",     LabXDMA, paramWords,     1024),
     DEFINE_PROP_UINT32("microcode-words", LabXDMA, microcodeWords, 1024),
     DEFINE_PROP_UINT32("num-index-regs",  LabXDMA, numIndexRegs,   4),
-    DEFINE_PROP_UINT32("num-channels",    LabXDMA, numChannels,    1),
+    DEFINE_PROP_UINT32("dma-num-channels",LabXDMA, numChannels,    1),
     DEFINE_PROP_UINT32("num-alus",        LabXDMA, numAlus,        1),
     DEFINE_PROP_UINT32("status-fifo",     LabXDMA, hasStatusFifo,  1),
     DEFINE_PROP_END_OF_LIST(),
