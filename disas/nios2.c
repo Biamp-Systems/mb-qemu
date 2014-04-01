@@ -3084,7 +3084,7 @@ see <http://www.gnu.org/licenses/>.  */
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
-#include "dis-asm.h"
+/*#include "dis-asm.h"*/
 /*#include "nios2.h"*/
 
 #ifndef FALSE
