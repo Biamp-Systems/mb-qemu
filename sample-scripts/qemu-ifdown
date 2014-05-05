@@ -1,0 +1,39 @@
+#!/bin/sh
+
+#
+# script to bring up the tun device in QEMU in bridged mode
+# first parameter is name of tap device (e.g. tap0)
+#
+# some constants specific to the local host ? change to suit your host
+#
+
+ETHADPT=eth1
+ETHIP=192.168.1.101
+ETHIP2=192.168.2.101
+GATEWAY=192.168.2.1
+BROADCAST=192.168.2.255
+
+#
+# echo "Remove both interfaces from the bridge"
+#
+brctl delif br0 $ETHADPT
+brctl delif br0 $1
+
+#
+# echo "Bring down and remove the tunneled interface"
+#
+ifconfig $1 0.0.0.0 down
+openvpn --rmtun --dev $1 -user 'id -un'
+
+#
+# echo "Bring the bridge down, then destroy it"
+#
+ifconfig br0 down
+brctl delbr br0
+
+#
+# echo "First take the interface down, then bring it up with the IP(s) above"
+#
+ifconfig $ETHADPT down
+ifconfig $ETHADPT $ETHIP up
+ifconfig $ETHADPT:1 $ETHIP2 up 
