@@ -273,7 +273,7 @@ static int cpus_probe(char *node_path, FDTMachineInfo *fdti, void *opaque)
     return 0;
 }
 
-static void labx_nios2_init(QEMUMachineInitArgs *args)
+static void labx_nios2_init(MachineState *machine)
 {
     MemoryRegion *address_space_mem = get_system_memory();
 
@@ -305,17 +305,17 @@ static void labx_nios2_init(QEMUMachineInitArgs *args)
     /* Create other devices listed in the device-tree */
     fdt_init_destroy_fdti(fdt_generic_create_machine(fdt, NULL));
 
-    if (args->kernel_filename) {
+    if (machine->kernel_filename) {
         uint64_t entry = 0, low = 0, high = 0;
         uint32_t base32 = 0;
 
         /* Boots a kernel elf binary.  */
-        kernel_size = load_elf(args->kernel_filename, NULL, NULL,
+        kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
                                &entry, &low, &high,
                                0, ELF_MACHINE, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
-            kernel_size = load_elf(args->kernel_filename, translate_kernel_address,
+            kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
                                    NULL, &entry, NULL, NULL,
                                    0, ELF_MACHINE, 0);
         }
@@ -326,27 +326,27 @@ static void labx_nios2_init(QEMUMachineInitArgs *args)
         if (kernel_size < 0) {
             hwaddr uentry, loadaddr;
 
-            kernel_size = load_uimage(args->kernel_filename, &uentry, &loadaddr, 0);
+            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0);
             boot_info.bootstrap_pc = uentry;
             high = (loadaddr + kernel_size + 3) & ~3;
         }
 
         /* Not an ELF image nor an u-boot image, try a RAW image.  */
         if (kernel_size < 0) {
-            kernel_size = load_image_targphys(args->kernel_filename, ddr_base,
+            kernel_size = load_image_targphys(machine->kernel_filename, ddr_base,
                                               ram_size);
             boot_info.bootstrap_pc = ddr_base;
             high = (ddr_base + kernel_size + 3) & ~3;
         }
 
-        if (args->initrd_filename) {
+        if (machine->initrd_filename) {
             uint32_t initrd_base = 0x88c00000;
             uint32_t initrd_size =
-                load_image_targphys(args->initrd_filename, initrd_base,
+                load_image_targphys(machine->initrd_filename, initrd_base,
                                     ram_size - initrd_base);
             if (initrd_size <= 0) {
                 fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
-                        args->initrd_filename);
+                        machine->initrd_filename);
                 exit(1);
             }
 
@@ -356,14 +356,14 @@ static void labx_nios2_init(QEMUMachineInitArgs *args)
         }
 
         boot_info.cmdline = high + 4096;
-        if (args->kernel_cmdline && strlen(args->kernel_cmdline)) {
-            pstrcpy_targphys("cmdline", boot_info.cmdline, 256, args->kernel_cmdline);
+        if (machine->kernel_cmdline && strlen(machine->kernel_cmdline)) {
+            pstrcpy_targphys("cmdline", boot_info.cmdline, 256, machine->kernel_cmdline);
         }
         /* Provide a device-tree.  */
         boot_info.fdt = boot_info.cmdline + 4096;
         labx_load_device_tree(boot_info.fdt, ram_size,
                               0, 0,
-                              args->kernel_cmdline);
+                              machine->kernel_cmdline);
     }
 }
 

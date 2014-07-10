@@ -53,7 +53,12 @@ typedef uint64_t vaddr;
 
 #define TYPE_CPU "cpu"
 
-#define CPU(obj) OBJECT_CHECK(CPUState, (obj), TYPE_CPU)
+/* Since this macro is used a lot in hot code paths and in conjunction with
+ * FooCPU *foo_env_get_cpu(), we deviate from usual QOM practice by using
+ * an unchecked cast.
+ */
+#define CPU(obj) ((CPUState *)(obj))
+
 #define CPU_CLASS(class) OBJECT_CLASS_CHECK(CPUClass, (class), TYPE_CPU)
 #define CPU_GET_CLASS(obj) OBJECT_GET_CLASS(CPUClass, (obj), TYPE_CPU)
 
@@ -75,6 +80,8 @@ struct TranslationBlock;
  * @has_work: Callback for checking if there is work to do.
  * @do_interrupt: Callback for interrupt handling.
  * @do_unassigned_access: Callback for unassigned access handling.
+ * @do_unaligned_access: Callback for unaligned access handling, if
+ * the target defines #ALIGNED_ONLY.
  * @memory_rw_debug: Callback for GDB memory access.
  * @dump_state: Callback for dumping state.
  * @dump_statistics: Callback for dumping statistics.
@@ -107,6 +114,9 @@ typedef struct CPUClass {
     bool (*has_work)(CPUState *cpu);
     void (*do_interrupt)(CPUState *cpu);
     CPUUnassignedAccess do_unassigned_access;
+    void (*do_unaligned_access)(CPUState *cpu, vaddr addr,
+                                int is_write, int is_user, uintptr_t retaddr);
+    bool (*virtio_is_big_endian)(CPUState *cpu);
     int (*memory_rw_debug)(CPUState *cpu, vaddr addr,
                            uint8_t *buf, int len, bool is_write);
     void (*dump_state)(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
@@ -539,8 +549,7 @@ void cpu_interrupt(CPUState *cpu, int mask);
 
 #endif /* USER_ONLY */
 
-#ifndef CONFIG_USER_ONLY
-
+#ifdef CONFIG_SOFTMMU
 static inline void cpu_unassigned_access(CPUState *cpu, hwaddr addr,
                                          bool is_write, bool is_exec,
                                          int opaque, unsigned size)
@@ -552,6 +561,14 @@ static inline void cpu_unassigned_access(CPUState *cpu, hwaddr addr,
     }
 }
 
+static inline void cpu_unaligned_access(CPUState *cpu, vaddr addr,
+                                        int is_write, int is_user,
+                                        uintptr_t retaddr)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+
+    return cc->do_unaligned_access(cpu, addr, is_write, is_user, retaddr);
+}
 #endif
 
 /**

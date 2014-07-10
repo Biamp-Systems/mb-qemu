@@ -23,10 +23,16 @@
 
 #include "instruction.h"
 #include "exec/exec-all.h"
-#include "helper.h"
+#include "exec/helper-proto.h"
 
-#define GEN_HELPER 1
-#include "helper.h"
+#include "exec/cpu_ldst.h"
+#include "exec/helper-gen.h"
+
+/* TODO: These local functions conflict with new macros in cpu_ldst.h,
+   but the INSTRUCTION macro needs them to be named correctly... */
+#undef ldw
+#undef stb
+#undef stw
 
 static inline uint32_t get_opcode(uint32_t code)
 {

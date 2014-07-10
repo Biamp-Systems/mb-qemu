@@ -60,10 +60,10 @@ static void machine_cpu_reset(MicroBlazeCPU *cpu, void *opaque)
 }
 
 static void
-petalogix_s3adsp1800_init(QEMUMachineInitArgs *args)
+petalogix_s3adsp1800_init(MachineState *machine)
 {
-    ram_addr_t ram_size = args->ram_size;
-    const char *cpu_model = args->cpu_model;
+    ram_addr_t ram_size = machine->ram_size;
+    const char *cpu_model = machine->cpu_model;
     DeviceState *dev;
     MicroBlazeCPU *cpu;
     DriveInfo *dinfo;
@@ -97,7 +97,7 @@ petalogix_s3adsp1800_init(QEMUMachineInitArgs *args)
                           FLASH_SIZE >> 16,
                           1, 0x89, 0x18, 0x0000, 0x0, 1);
     printf("load of flash = %d to %08X\n",
-           load_image_targphys(args->initrd_filename, 0x87000000, FLASH_SIZE),
+           load_image_targphys(machine->initrd_filename, 0x87000000, FLASH_SIZE),
            0x87000000);
 
     dev = qdev_create(NULL, "xlnx.xps-intc");
@@ -132,7 +132,7 @@ petalogix_s3adsp1800_init(QEMUMachineInitArgs *args)
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq[ETHLITE_IRQ]);
 
     microblaze_load_kernel(cpu, ddr_base, ram_size,
-                           args->initrd_filename,
+                           machine->initrd_filename,
                            BINARY_DEVICE_TREE_FILE,
                            machine_cpu_reset, NULL);
 }

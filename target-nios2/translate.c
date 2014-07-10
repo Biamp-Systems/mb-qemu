@@ -28,13 +28,13 @@
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "disas/disas.h"
-#include "helper.h"
+#include "exec/helper-proto.h"
 #include "qemu-common.h"
 
 #include "instruction.h"
 
-#define GEN_HELPER 1
-#include "helper.h"
+#include "exec/cpu_ldst.h"
+#include "exec/helper-gen.h"
 
 static const char *regnames[] = {
     "zero",     "at",       "r2",       "r3",
