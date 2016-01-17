@@ -100,10 +100,10 @@ static void *get_device_tree(int *fdt_size)
 }
 
 static int labx_microblaze_load_device_tree(hwaddr addr,
-                                      uint32_t ramsize,
-                                      hwaddr initrd_base,
-                                      hwaddr initrd_size,
-                                      const char *kernel_cmdline)
+                                            uint32_t ramsize,
+                                            hwaddr initrd_base,
+                                            hwaddr initrd_size,
+                                            const char *kernel_cmdline)
 {
     int fdt_size;
     void *fdt;
@@ -173,11 +173,11 @@ static void labx_microblaze_init(MachineState *machine)
     /* Attach emulated BRAM through the LMB. LMB size is not specified in the
        device-tree but there must be one to hold the vector table. */
     memory_region_init_ram(phys_lmb_bram, NULL, "labx_microblaze.lmb_bram",
-                           LMB_BRAM_SIZE);
+                           LMB_BRAM_SIZE, &error_fatal);
     vmstate_register_ram_global(phys_lmb_bram);
     memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
 
-    memory_region_init_ram(phys_ram, NULL, "labx_microblaze.ram", ram_size);
+    memory_region_init_ram(phys_ram, NULL, "labx_microblaze.ram", ram_size, &error_fatal);
     vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
 
@@ -192,12 +192,12 @@ static void labx_microblaze_init(MachineState *machine)
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
                                &entry, &low, &high,
-                               1, ELF_MACHINE, 0);
+                               1, EM_MICROBLAZE, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
             kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
                                    NULL, &entry, NULL, NULL,
-                                   1, ELF_MACHINE, 0);
+                                   1, EM_MICROBLAZE, 0);
         }
         /* Always boot into physical ram.  */
         boot_info.bootstrap_pc = ddr_base + (entry & 0x07ffffff);
@@ -206,7 +206,8 @@ static void labx_microblaze_init(MachineState *machine)
         if (kernel_size < 0) {
             hwaddr uentry, loadaddr;
 
-            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0);
+            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0,
+                                      NULL, NULL);
             boot_info.bootstrap_pc = uentry;
             high = (loadaddr + kernel_size + 3) & ~3;
         }
@@ -222,8 +223,8 @@ static void labx_microblaze_init(MachineState *machine)
         if (machine->initrd_filename) {
             uint32_t initrd_base = 0x88c00000;
             uint32_t initrd_size =
-                    load_image_targphys(machine->initrd_filename, initrd_base,
-                                        ram_size - initrd_base);
+                load_image_targphys(machine->initrd_filename, initrd_base,
+                                    ram_size - initrd_base);
             if (initrd_size <= 0) {
                 fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
                         machine->initrd_filename);
@@ -242,24 +243,18 @@ static void labx_microblaze_init(MachineState *machine)
         /* Provide a device-tree.  */
         boot_info.fdt = boot_info.cmdline + 4096;
         labx_microblaze_load_device_tree(boot_info.fdt, ram_size,
-                                   0, 0,
-                                   machine->kernel_cmdline);
+                                         0, 0,
+                                         machine->kernel_cmdline);
     }
 }
 
-static QEMUMachine labx_microblaze_machine = {
-    .name = "labx-microblaze-devicetree",
-    .desc = "Microblaze design based on the peripherals specified "
-            "in the device-tree.",
-    .init = labx_microblaze_init,
-    .is_default = 1
-};
-
-static void labx_microblaze_machine_init(void)
+static void labx_microblaze_devicetree_machine_init(MachineClass *mc)
 {
-    qemu_register_machine(&labx_microblaze_machine);
+    mc->desc = "MicroBlaze design based on the peripherals specified in the device-tree.";
+    mc->init = labx_microblaze_init;
+    mc->is_default = 1;
 }
 
-machine_init(labx_microblaze_machine_init);
+DEFINE_MACHINE("labx-microblaze-devicetree", labx_microblaze_devicetree_machine_init)
 
 fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0, &endian);

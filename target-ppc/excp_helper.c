@@ -23,6 +23,7 @@
 #include "helper_regs.h"
 
 //#define DEBUG_OP
+//#define DEBUG_SOFTWARE_TLB
 //#define DEBUG_EXCEPTIONS
 
 #ifdef DEBUG_EXCEPTIONS
@@ -48,7 +49,7 @@ void ppc_cpu_do_interrupt(CPUState *cs)
     env->error_code = 0;
 }
 
-void ppc_hw_interrupt(CPUPPCState *env)
+static void ppc_hw_interrupt(CPUPPCState *env)
 {
     CPUState *cs = CPU(ppc_env_get_cpu(env));
 
@@ -131,11 +132,10 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
             /* Machine check exception is not enabled.
              * Enter checkstop state.
              */
-            if (qemu_log_enabled()) {
+            fprintf(stderr, "Machine check while not allowed. "
+                    "Entering checkstop state\n");
+            if (qemu_log_separate()) {
                 qemu_log("Machine check while not allowed. "
-                        "Entering checkstop state\n");
-            } else {
-                fprintf(stderr, "Machine check while not allowed. "
                         "Entering checkstop state\n");
             }
             cs->halted = 1;
@@ -200,7 +200,7 @@ static inline void powerpc_excp(PowerPCCPU *cpu, int excp_model, int excp)
         /* Get rS/rD and rA from faulting opcode */
         env->spr[SPR_DSISR] |= (cpu_ldl_code(env, (env->nip - 4))
                                 & 0x03FF0000) >> 16;
-        goto store_current;
+        goto store_next;
     case POWERPC_EXCP_PROGRAM:   /* Program exception                        */
         switch (env->error_code & ~0xF) {
         case POWERPC_EXCP_FP:
@@ -692,7 +692,7 @@ void ppc_cpu_do_interrupt(CPUState *cs)
     powerpc_excp(cpu, env->excp_model, cs->exception_index);
 }
 
-void ppc_hw_interrupt(CPUPPCState *env)
+static void ppc_hw_interrupt(CPUPPCState *env)
 {
     PowerPCCPU *cpu = ppc_env_get_cpu(env);
     int hdice;
@@ -810,7 +810,30 @@ void ppc_hw_interrupt(CPUPPCState *env)
         }
     }
 }
+
+void ppc_cpu_do_system_reset(CPUState *cs)
+{
+    PowerPCCPU *cpu = POWERPC_CPU(cs);
+    CPUPPCState *env = &cpu->env;
+
+    powerpc_excp(cpu, env->excp_model, POWERPC_EXCP_RESET);
+}
 #endif /* !CONFIG_USER_ONLY */
+
+bool ppc_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
+{
+    PowerPCCPU *cpu = POWERPC_CPU(cs);
+    CPUPPCState *env = &cpu->env;
+
+    if (interrupt_request & CPU_INTERRUPT_HARD) {
+        ppc_hw_interrupt(env);
+        if (env->pending_interrupts == 0) {
+            cs->interrupt_request &= ~CPU_INTERRUPT_HARD;
+        }
+        return true;
+    }
+    return false;
+}
 
 #if defined(DEBUG_OP)
 static void cpu_dump_rfi(target_ulong RA, target_ulong msr)

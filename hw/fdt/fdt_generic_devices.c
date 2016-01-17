@@ -42,9 +42,10 @@ int pflash_cfi01_fdt_init(char *node_path, FDTMachineInfo *fdti, void *opaque)
 
     dinfo = drive_get_next(IF_PFLASH);
     pflash_cfi01_register(flash_base, NULL, node_path, flash_size,
-                            dinfo ? dinfo->bdrv : NULL, FLASH_SECTOR_SIZE,
-                            flash_size/FLASH_SECTOR_SIZE,
-                            bank_width, 0x89, 0x18, 0x0000, 0x0, be);
+                          dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
+                          FLASH_SECTOR_SIZE,
+                          flash_size/FLASH_SECTOR_SIZE,
+                          bank_width, 0x89, 0x18, 0x0000, 0x0, be);
     return 0;
 }
 

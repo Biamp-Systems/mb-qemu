@@ -35,6 +35,7 @@ struct DMAChannel {
 struct PXA2xxLCDState {
     MemoryRegion *sysmem;
     MemoryRegion iomem;
+    MemoryRegionSection fbsection;
     qemu_irq irq;
     int irqlevel;
 
@@ -279,14 +280,6 @@ static inline void pxa2xx_dma_ber_set(PXA2xxLCDState *s, int ch)
         s->liidr = s->dma_ch[ch].id;
 }
 
-/* Set Read Status interrupt high and poke associated registers */
-static inline void pxa2xx_dma_rdst_set(PXA2xxLCDState *s)
-{
-    s->status[0] |= LCSR0_RDST;
-    if (s->irqlevel && !(s->control[0] & LCCR0_RDSTM))
-        s->status[0] |= LCSR0_SINT;
-}
-
 /* Load new Frame Descriptors from DMA */
 static void pxa2xx_descriptor_load(PXA2xxLCDState *s)
 {
@@ -316,10 +309,10 @@ static void pxa2xx_descriptor_load(PXA2xxLCDState *s)
         }
 
         cpu_physical_memory_read(descptr, &desc, sizeof(desc));
-        s->dma_ch[i].descriptor = tswap32(desc.fdaddr);
-        s->dma_ch[i].source = tswap32(desc.fsaddr);
-        s->dma_ch[i].id = tswap32(desc.fidr);
-        s->dma_ch[i].command = tswap32(desc.ldcmd);
+        s->dma_ch[i].descriptor = le32_to_cpu(desc.fdaddr);
+        s->dma_ch[i].source = le32_to_cpu(desc.fsaddr);
+        s->dma_ch[i].id = le32_to_cpu(desc.fidr);
+        s->dma_ch[i].command = le32_to_cpu(desc.ldcmd);
     }
 }
 
@@ -695,8 +688,11 @@ static void pxa2xx_lcdc_dma0_redraw_rot0(PXA2xxLCDState *s,
 
     dest_width = s->xres * s->dest_width;
     *miny = 0;
-    framebuffer_update_display(surface, s->sysmem,
-                               addr, s->xres, s->yres,
+    if (s->invalidated) {
+        framebuffer_update_memory_section(&s->fbsection, s->sysmem,
+                                          addr, s->yres, src_width);
+    }
+    framebuffer_update_display(surface, &s->fbsection, s->xres, s->yres,
                                src_width, dest_width, s->dest_width,
                                s->invalidated,
                                fn, s->dma_ch[0].palette, miny, maxy);
@@ -723,8 +719,11 @@ static void pxa2xx_lcdc_dma0_redraw_rot90(PXA2xxLCDState *s,
 
     dest_width = s->yres * s->dest_width;
     *miny = 0;
-    framebuffer_update_display(surface, s->sysmem,
-                               addr, s->xres, s->yres,
+    if (s->invalidated) {
+        framebuffer_update_memory_section(&s->fbsection, s->sysmem,
+                                          addr, s->yres, src_width);
+    }
+    framebuffer_update_display(surface, &s->fbsection, s->xres, s->yres,
                                src_width, s->dest_width, -dest_width,
                                s->invalidated,
                                fn, s->dma_ch[0].palette,
@@ -755,8 +754,11 @@ static void pxa2xx_lcdc_dma0_redraw_rot180(PXA2xxLCDState *s,
 
     dest_width = s->xres * s->dest_width;
     *miny = 0;
-    framebuffer_update_display(surface, s->sysmem,
-                               addr, s->xres, s->yres,
+    if (s->invalidated) {
+        framebuffer_update_memory_section(&s->fbsection, s->sysmem,
+                                          addr, s->yres, src_width);
+    }
+    framebuffer_update_display(surface, &s->fbsection, s->xres, s->yres,
                                src_width, -dest_width, -s->dest_width,
                                s->invalidated,
                                fn, s->dma_ch[0].palette, miny, maxy);
@@ -786,8 +788,11 @@ static void pxa2xx_lcdc_dma0_redraw_rot270(PXA2xxLCDState *s,
 
     dest_width = s->yres * s->dest_width;
     *miny = 0;
-    framebuffer_update_display(surface, s->sysmem,
-                               addr, s->xres, s->yres,
+    if (s->invalidated) {
+        framebuffer_update_memory_section(&s->fbsection, s->sysmem,
+                                          addr, s->yres, src_width);
+    }
+    framebuffer_update_display(surface, &s->fbsection, s->xres, s->yres,
                                src_width, -s->dest_width, dest_width,
                                s->invalidated,
                                fn, s->dma_ch[0].palette,

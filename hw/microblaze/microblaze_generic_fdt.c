@@ -73,7 +73,7 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
     }
 
     if (VAL("xlnx,endianness")) {
-        env->pvr.regs[0] |= PVR0_ENDI;
+        env->pvr.regs[0] |= PVR0_ENDI_MASK;
     }
 
     if (VAL("xlnx,use-barrel")) {
@@ -152,11 +152,11 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
     /* MMU regs.  */
     t = VAL("xlnx,use-mmu");
     if (use_exc || t) {
-        env->pvr.regs[0] |= PVR0_USE_EXC_MASK ;
+        env->pvr.regs[0] |= PVR0_USE_EXC_MASK;
     }
 
     if (t) {
-        env->pvr.regs[0] |= PVR0_USE_MMU;
+        env->pvr.regs[0] |= PVR0_USE_MMU_MASK;
     }
     env->pvr.regs[11] = t << 30;
     t = VAL("xlnx,mmu-zones");
@@ -334,11 +334,13 @@ static void microblaze_generic_fdt_init(MachineState *machine)
 
     /* FIXME: instantiate from FDT like evrything else */
     /* Attach emulated BRAM through the LMB.  */
-    memory_region_init_ram(lmb_bram, NULL, "microblaze_fdt.lmb_bram", LMB_BRAM_SIZE);
+    memory_region_init_ram(lmb_bram, NULL, "microblaze_fdt.lmb_bram",
+                           LMB_BRAM_SIZE, &error_abort);
     vmstate_register_ram_global(lmb_bram);
     memory_region_add_subregion(address_space_mem, 0, lmb_bram);
 
-    memory_region_init_ram(ddr_ram, NULL, "microblaze_fdt.ddr_ram", ram_size);
+    memory_region_init_ram(ddr_ram, NULL, "microblaze_fdt.ddr_ram", ram_size,
+		           &error_abort);
     vmstate_register_ram_global(ddr_ram);
     memory_region_add_subregion(address_space_mem, ram_base, ddr_ram);
 
@@ -357,18 +359,14 @@ no_dtb_arg:
     return;
 }
 
-static QEMUMachine microblaze_generic_fdt = {
-    .name = MACHINE_NAME,
-    .desc = "Petalogix FDT Generic, for all Microblaze MMU boards",
-    .init = microblaze_generic_fdt_init,
-};
-
-static void microblaze_fdt_init(void)
+static void microblaze_generic_fdt_machine_init(MachineClass *mc)
 {
-    qemu_register_machine(&microblaze_generic_fdt);
+    mc->desc = "MicroBlaze design based on the peripherals specified in the device-tree.";
+    mc->init = microblaze_generic_fdt_init;
+    mc->is_default = 0;
 }
 
-machine_init(microblaze_fdt_init);
+DEFINE_MACHINE(MACHINE_NAME, microblaze_generic_fdt_machine_init)
 
 fdt_register_compatibility(simple_bus_fdt_init, "xlnx,compound");
 fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0,

@@ -27,9 +27,6 @@ typedef struct GenericList
     struct GenericList *next;
 } GenericList;
 
-void visit_start_handle(Visitor *v, void **obj, const char *kind,
-                        const char *name, Error **errp);
-void visit_end_handle(Visitor *v, Error **errp);
 void visit_start_struct(Visitor *v, void **obj, const char *kind,
                         const char *name, size_t size, Error **errp);
 void visit_end_struct(Visitor *v, Error **errp);
@@ -39,11 +36,24 @@ void visit_end_implicit_struct(Visitor *v, Error **errp);
 void visit_start_list(Visitor *v, const char *name, Error **errp);
 GenericList *visit_next_list(Visitor *v, GenericList **list, Error **errp);
 void visit_end_list(Visitor *v, Error **errp);
-void visit_optional(Visitor *v, bool *present, const char *name,
-                    Error **errp);
-void visit_get_next_type(Visitor *v, int *obj, const int *qtypes,
+
+/**
+ * Check if an optional member @name of an object needs visiting.
+ * For input visitors, set *@present according to whether the
+ * corresponding visit_type_*() needs calling; for other visitors,
+ * leave *@present unchanged.  Return *@present for convenience.
+ */
+bool visit_optional(Visitor *v, bool *present, const char *name);
+
+/**
+ * Determine the qtype of the item @name in the current object visit.
+ * For input visitors, set *@type to the correct qtype of a qapi
+ * alternate type; for other visitors, leave *@type unchanged.
+ * If @promote_int, treat integers as QTYPE_FLOAT.
+ */
+void visit_get_next_type(Visitor *v, QType *type, bool promote_int,
                          const char *name, Error **errp);
-void visit_type_enum(Visitor *v, int *obj, const char *strings[],
+void visit_type_enum(Visitor *v, int *obj, const char * const strings[],
                      const char *kind, const char *name, Error **errp);
 void visit_type_int(Visitor *v, int64_t *obj, const char *name, Error **errp);
 void visit_type_uint8(Visitor *v, uint8_t *obj, const char *name, Error **errp);
@@ -58,5 +68,8 @@ void visit_type_size(Visitor *v, uint64_t *obj, const char *name, Error **errp);
 void visit_type_bool(Visitor *v, bool *obj, const char *name, Error **errp);
 void visit_type_str(Visitor *v, char **obj, const char *name, Error **errp);
 void visit_type_number(Visitor *v, double *obj, const char *name, Error **errp);
+void visit_type_any(Visitor *v, QObject **obj, const char *name, Error **errp);
+bool visit_start_union(Visitor *v, bool data_present, Error **errp);
+void visit_end_union(Visitor *v, bool data_present, Error **errp);
 
 #endif

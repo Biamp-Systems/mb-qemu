@@ -88,9 +88,9 @@ static void illegal_instruction(DisasContext *dc,
     t_gen_helper_raise_exception(dc, EXCP_ILLEGAL);
 }
 
-static void gen_check_supervisor(DisasContext *dc, int label)
+static void gen_check_supervisor(DisasContext *dc, TCGLabel *label)
 {
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     TCGv_i32 tmp = tcg_temp_new();
     tcg_gen_andi_tl(tmp, dc->cpu_R[CR_STATUS], CR_STATUS_U);
@@ -280,7 +280,7 @@ static void bge(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_GE, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -361,7 +361,7 @@ static void blt(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_LT, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -421,7 +421,7 @@ static void bne(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_NE, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -498,7 +498,7 @@ static void beq(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_EQ, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -587,7 +587,7 @@ static void bgeu(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_GEU, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -669,7 +669,7 @@ static void bltu(DisasContext *dc, uint32_t code)
 {
     I_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
 
     tcg_gen_brcond_tl(TCG_COND_LTU, dc->cpu_R[instr->a],
                       dc->cpu_R[instr->b], l1);
@@ -864,7 +864,7 @@ static void mulxuu(DisasContext *dc, uint32_t code)
     tcg_gen_mul_i64(t0, t0, t1);
 
     tcg_gen_shri_i64(t0, t0, 32);
-    tcg_gen_trunc_i64_i32(dc->cpu_R[instr->c], t0);
+    tcg_gen_extrl_i64_i32(dc->cpu_R[instr->c], t0);
 
     tcg_temp_free_i64(t0);
     tcg_temp_free_i64(t1);
@@ -990,7 +990,7 @@ static void mulxsu(DisasContext *dc, uint32_t code)
     tcg_gen_mul_i64(t0, t0, t1);
 
     tcg_gen_shri_i64(t0, t0, 32);
-    tcg_gen_trunc_i64_i32(dc->cpu_R[instr->c], t0);
+    tcg_gen_extrl_i64_i32(dc->cpu_R[instr->c], t0);
 
     tcg_temp_free_i64(t0);
     tcg_temp_free_i64(t1);
@@ -1083,7 +1083,7 @@ static void mulxss(DisasContext *dc, uint32_t code)
     tcg_gen_mul_i64(t0, t0, t1);
 
     tcg_gen_shri_i64(t0, t0, 32);
-    tcg_gen_trunc_i64_i32(dc->cpu_R[instr->c], t0);
+    tcg_gen_extrl_i64_i32(dc->cpu_R[instr->c], t0);
 
     tcg_temp_free_i64(t0);
     tcg_temp_free_i64(t1);
@@ -1126,7 +1126,7 @@ static void rdctl(DisasContext *dc, uint32_t code)
 {
     R_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
     gen_check_supervisor(dc, l1);
 
     switch (instr->imm5 + 32) {
@@ -1195,7 +1195,7 @@ static void wrctl(DisasContext *dc, uint32_t code)
 {
     R_TYPE(instr, code);
 
-    int l1 = gen_new_label();
+    TCGLabel *l1 = gen_new_label();
     gen_check_supervisor(dc, l1);
 
     switch (instr->imm5 + 32) {

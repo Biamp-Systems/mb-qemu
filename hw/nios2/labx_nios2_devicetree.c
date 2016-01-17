@@ -287,11 +287,11 @@ static void labx_nios2_init(MachineState *machine)
 
     /* Attach emulated BRAM through the LMB. LMB size is not specified
        in the device-tree but there must be one to hold the vector table. */
-    memory_region_init_ram(phys_lmb_bram, NULL, "nios2.lmb_bram", LMB_BRAM_SIZE);
+    memory_region_init_ram(phys_lmb_bram, NULL, "nios2.lmb_bram", LMB_BRAM_SIZE, &error_fatal);
     vmstate_register_ram_global(phys_lmb_bram);
     memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
 
-    memory_region_init_ram(phys_ram, NULL, "nios2.ram", ram_size);
+    memory_region_init_ram(phys_ram, NULL, "nios2.ram", ram_size, &error_fatal);
     vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
     memory_region_init_alias(phys_ram_alias, NULL, "nios2.ram.mirror",
@@ -312,12 +312,12 @@ static void labx_nios2_init(MachineState *machine)
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
                                &entry, &low, &high,
-                               0, ELF_MACHINE, 0);
+                               0, EM_ALTERA_NIOS2, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
             kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
                                    NULL, &entry, NULL, NULL,
-                                   0, ELF_MACHINE, 0);
+                                   0, EM_ALTERA_NIOS2, 0);
         }
         /* Always boot into physical ram.  */
         boot_info.bootstrap_pc = ddr_base + 0xc0000000 + (entry & 0x07ffffff);
@@ -326,7 +326,8 @@ static void labx_nios2_init(MachineState *machine)
         if (kernel_size < 0) {
             hwaddr uentry, loadaddr;
 
-            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0);
+            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0,
+                                      NULL, NULL);
             boot_info.bootstrap_pc = uentry;
             high = (loadaddr + kernel_size + 3) & ~3;
         }
@@ -367,19 +368,13 @@ static void labx_nios2_init(MachineState *machine)
     }
 }
 
-static QEMUMachine labx_nios2_machine = {
-    .name = "labx-nios2-devicetree",
-    .desc = "Nios II design based on the peripherals specified "
-            "in the device-tree.",
-    .init = labx_nios2_init,
-    .is_default = 1
-};
-
-static void labx_nios2_machine_init(void)
+static void labx_nios2_devicetree_machine_init(MachineClass *mc)
 {
-    qemu_register_machine(&labx_nios2_machine);
+    mc->desc = "Nios II design based on the peripherals specified in the device-tree.";
+    mc->init = labx_nios2_init;
+    mc->is_default = 1;
 }
 
-machine_init(labx_nios2_machine_init);
+DEFINE_MACHINE("labx-nios2-devicetree", labx_nios2_devicetree_machine_init)
 
 fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0, &endian);

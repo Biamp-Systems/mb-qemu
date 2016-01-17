@@ -21,13 +21,10 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
-#include <signal.h>
 #include <errno.h>
 
 #include "qemu.h"
 #include "target_signal.h"
-
-//#define DEBUG_SIGNAL
 
 void signal_init(void)
 {

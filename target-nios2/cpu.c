@@ -20,6 +20,7 @@
 
 #include "cpu.h"
 #include "qemu-common.h"
+#include "hw/qdev-properties.h"
 
 
 static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
@@ -30,9 +31,9 @@ static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
     env->regs[R_PC] = value;
 }
 
-static bool nios2_cpu_has_work(CPUState *cpu)
+static bool nios2_cpu_has_work(CPUState *cs)
 {
-    return cpu->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
+    return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
 #ifndef CONFIG_USER_ONLY
@@ -77,6 +78,22 @@ static void nios2_cpu_reset(CPUState *cs)
 #endif
 }
 
+static void nios2_disas_set_info(CPUState *cpu, disassemble_info *info)
+{
+    info->mach = bfd_arch_nios2;
+    info->print_insn = print_insn_nios2;
+}
+
+static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
+{
+    CPUState *cs = CPU(dev);
+    Nios2CPUClass *mcc = NIOS2_CPU_GET_CLASS(dev);
+
+    qemu_init_vcpu(cs);
+
+    mcc->parent_realize(dev, errp);
+}
+
 static void nios2_cpu_initfn(Object *obj)
 {
     CPUState *cs = CPU(obj);
@@ -84,7 +101,7 @@ static void nios2_cpu_initfn(Object *obj)
     CPUNios2State *env = &cpu->env;
 
     cs->env_ptr = env;
-    cpu_exec_init(env);
+    cpu_exec_init(cs, &error_abort);
 
 #ifndef CONFIG_USER_ONLY
     /* Inbound IRQ line */
@@ -93,15 +110,24 @@ static void nios2_cpu_initfn(Object *obj)
 
 }
 
+static Property nios2_properties[] = {
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
     Nios2CPUClass *ncc = NIOS2_CPU_CLASS(oc);
+
+    ncc->parent_realize = dc->realize;
+    dc->realize = nios2_cpu_realizefn;
 
     ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
     cc->has_work = nios2_cpu_has_work;
     cc->do_interrupt = nios2_cpu_do_interrupt;
+    cc->cpu_exec_interrupt = nios2_cpu_exec_interrupt;
     cc->dump_state = nios2_cpu_dump_state;
     cc->set_pc = nios2_cpu_set_pc;
 #ifdef CONFIG_USER_ONLY
@@ -109,6 +135,16 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 #else
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
 #endif
+    dc->props = nios2_properties;
+
+    cc->disas_set_info = nios2_disas_set_info;
+
+    /*
+     * Reason: nios2_cpu_initfn() calls cpu_exec_init(), which saves
+     * the object in cpus -> dangling pointer after final
+     * object_unref().
+     */
+    dc->cannot_destroy_with_object_finalize_yet = true;
 }
 
 static const TypeInfo nios2_cpu_type_info = {

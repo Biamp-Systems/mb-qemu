@@ -17,7 +17,7 @@
 #include "qemu/host-utils.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
-#include "sysemu/cpus.h"
+#include "kvm_i386.h"
 #include "hw/sysbus.h"
 #include "hw/kvm/clock.h"
 
@@ -88,18 +88,17 @@ static void kvmclock_vm_state_change(void *opaque, int running,
     int ret;
 
     if (running) {
-        struct kvm_clock_data data;
+        struct kvm_clock_data data = {};
         uint64_t time_at_migration = kvmclock_current_nsec(s);
 
         s->clock_valid = false;
 
-	/* We can't rely on the migrated clock value, just discard it */
-	if (time_at_migration) {
-	        s->clock = time_at_migration;
-	}
+        /* We can't rely on the migrated clock value, just discard it */
+        if (time_at_migration) {
+            s->clock = time_at_migration;
+        }
 
         data.clock = s->clock;
-        data.flags = 0;
         ret = kvm_vm_ioctl(kvm_state, KVM_SET_CLOCK, &data);
         if (ret < 0) {
             fprintf(stderr, "KVM_SET_CLOCK failed: %s\n", strerror(ret));
@@ -126,7 +125,8 @@ static void kvmclock_vm_state_change(void *opaque, int running,
             return;
         }
 
-        cpu_synchronize_all_states();
+        kvm_synchronize_all_tsc();
+
         ret = kvm_vm_ioctl(kvm_state, KVM_GET_CLOCK, &data);
         if (ret < 0) {
             fprintf(stderr, "KVM_GET_CLOCK failed: %s\n", strerror(ret));

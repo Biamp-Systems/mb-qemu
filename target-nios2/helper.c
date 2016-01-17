@@ -302,3 +302,16 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 
 #endif /* !CONFIG_USER_ONLY */
 
+bool nios2_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
+{
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUNios2State *env = &cpu->env;
+
+    if ((interrupt_request & CPU_INTERRUPT_HARD)
+        && (env->regs[CR_STATUS] & CR_STATUS_PIE)) {
+        cs->exception_index = EXCP_IRQ;
+        nios2_cpu_do_interrupt(cs);
+        return true;
+    }
+    return false;
+}

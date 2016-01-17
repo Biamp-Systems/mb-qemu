@@ -45,6 +45,8 @@
 #include <xen/io/kbdif.h>
 #include <xen/io/protocols.h>
 
+#include "trace.h"
+
 #ifndef BTN_LEFT
 #define BTN_LEFT 0x110 /* from <linux/input.h> */
 #endif
@@ -324,6 +326,8 @@ static void xenfb_mouse_event(void *opaque,
     int dh = surface_height(surface);
     int i;
 
+    trace_xenfb_mouse_event(opaque, dx, dy, dz, button_state,
+                            xenfb->abs_pointer_wanted);
     if (xenfb->abs_pointer_wanted)
 	xenfb_send_position(xenfb,
 			    dx * (dw - 1) / 0x7fff,
@@ -380,6 +384,7 @@ static void input_connected(struct XenDevice *xendev)
     if (in->qmouse) {
         qemu_remove_mouse_event_handler(in->qmouse);
     }
+    trace_xenfb_input_connected(xendev, in->abs_pointer_wanted);
     in->qmouse = qemu_add_mouse_event_handler(xenfb_mouse_event, in,
 					      in->abs_pointer_wanted,
 					      "Xen PVFB Mouse");
@@ -713,15 +718,17 @@ static void xenfb_update(void *opaque)
 
     /* resize if needed */
     if (xenfb->do_resize) {
+        pixman_format_code_t format;
+
         xenfb->do_resize = 0;
         switch (xenfb->depth) {
         case 16:
         case 32:
             /* console.c supported depth -> buffer can be used directly */
+            format = qemu_default_pixman_format(xenfb->depth, true);
             surface = qemu_create_displaysurface_from
-                (xenfb->width, xenfb->height, xenfb->depth,
-                 xenfb->row_stride, xenfb->pixels + xenfb->offset,
-                 false);
+                (xenfb->width, xenfb->height, format,
+                 xenfb->row_stride, xenfb->pixels + xenfb->offset);
             break;
         default:
             /* we must convert stuff */
@@ -777,18 +784,20 @@ static void xenfb_invalidate(void *opaque)
 
 static void xenfb_handle_events(struct XenFB *xenfb)
 {
-    uint32_t prod, cons;
+    uint32_t prod, cons, out_cons;
     struct xenfb_page *page = xenfb->c.page;
 
     prod = page->out_prod;
-    if (prod == page->out_cons)
+    out_cons = page->out_cons;
+    if (prod == out_cons)
 	return;
     xen_rmb();		/* ensure we see ring contents up to prod */
-    for (cons = page->out_cons; cons != prod; cons++) {
+    for (cons = out_cons; cons != prod; cons++) {
 	union xenfb_out_event *event = &XENFB_OUT_RING_REF(page, cons);
+        uint8_t type = event->type;
 	int x, y, w, h;
 
-	switch (event->type) {
+	switch (type) {
 	case XENFB_TYPE_UPDATE:
 	    if (xenfb->up_count == UP_QUEUE)
 		xenfb->up_fullscreen = 1;

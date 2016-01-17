@@ -56,6 +56,7 @@ typedef struct Nios2CPUClass {
     CPUClass parent_class;
     /*< public >*/
 
+    DeviceRealize parent_realize;
     void (*parent_reset)(CPUState *cpu);
 } Nios2CPUClass;
 
@@ -65,9 +66,6 @@ typedef struct Nios2CPUClass {
 #define RESET_ADDRESS         0x00000000
 #define EXCEPTION_ADDRESS     0x00000004
 #define FAST_TLB_MISS_ADDRESS 0x00000008
-
-
-#define ELF_MACHINE EM_ALTERA_NIOS2
 
 /* Main interrupt line */
 #define NIOS2_CPU_IRQ 0
@@ -208,9 +206,10 @@ static inline Nios2CPU *nios2_env_get_cpu(CPUNios2State *env)
 #define ENV_OFFSET offsetof(Nios2CPU, env)
 
 Nios2CPU *cpu_nios2_init(const char *cpu_model);
-int cpu_nios2_exec(CPUNios2State *s);
+int cpu_nios2_exec(CPUState *s);
 void cpu_nios2_close(CPUNios2State *s);
 void nios2_cpu_do_interrupt(CPUState *cs);
+bool nios2_cpu_exec_interrupt(CPUState *cs, int int_req);
 int cpu_nios2_signal_handler(int host_signum, void *pinfo, void *puc);
 void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env);
 void nios2_cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
@@ -243,7 +242,7 @@ static inline CPUNios2State *cpu_init(const char *cpu_model)
 #define MMU_SUPERVISOR_IDX  0
 #define MMU_USER_IDX        1
 
-static inline int cpu_mmu_index(CPUNios2State *env)
+static inline int cpu_mmu_index(CPUNios2State *env, bool ifetch)
 {
     return (env->regs[CR_STATUS] & CR_STATUS_U) ? MMU_USER_IDX :
                                                   MMU_SUPERVISOR_IDX;

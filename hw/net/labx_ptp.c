@@ -22,7 +22,7 @@
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
 
-#define min_bits qemu_fls
+#define min_bits(i) (32 - clz32((i)))
 #define RAM_INDEX(addr, size) (((addr)>>2)&((1<<min_bits((size)-1))-1))
 
 #define PTP_MAX_PACKETS      8

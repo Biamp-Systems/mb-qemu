@@ -65,14 +65,12 @@ static void irq_handler(void *opaque, int irq, int level)
     update_irq(pv);
 }
 
-static int altera_iic_init(SysBusDevice *dev)
+static void altera_iic_init(Object *obj)
 {
-    AlteraIIC *pv = ALTERA_IIC(dev);
+    AlteraIIC *pv = ALTERA_IIC(obj);
 
     qdev_init_gpio_in(DEVICE(pv), irq_handler, 32);
-    sysbus_init_irq(dev, &pv->parent_irq);
-
-    return 0;
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &pv->parent_irq);
 }
 
 static Property altera_iic_properties[] = {
@@ -83,9 +81,7 @@ static Property altera_iic_properties[] = {
 static void altera_iic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    k->init = altera_iic_init;
     dc->props = altera_iic_properties;
 }
 
@@ -93,6 +89,7 @@ static TypeInfo altera_iic_info = {
     .name          = "altera,iic",
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(AlteraIIC),
+    .instance_init = altera_iic_init,
     .class_init    = altera_iic_class_init,
 };
 

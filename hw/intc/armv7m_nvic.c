@@ -28,6 +28,7 @@ typedef struct {
     MemoryRegion gic_iomem_alias;
     MemoryRegion container;
     uint32_t num_irq;
+    qemu_irq sysresetreq;
 } nvic_state;
 
 #define TYPE_NVIC "armv7m_nvic"
@@ -77,6 +78,15 @@ static inline int64_t systick_scale(nvic_state *s)
 
 static void systick_reload(nvic_state *s, int reset)
 {
+    /* The Cortex-M3 Devices Generic User Guide says that "When the
+     * ENABLE bit is set to 1, the counter loads the RELOAD value from the
+     * SYST RVR register and then counts down". So, we need to check the
+     * ENABLE bit before reloading the value.
+     */
+    if ((s->systick.control & SYSTICK_ENABLE) == 0) {
+        return;
+    }
+
     if (reset)
         s->systick.tick = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     s->systick.tick += (s->systick.reload + 1) * systick_scale(s);
@@ -122,7 +132,7 @@ int armv7m_nvic_acknowledge_irq(void *opaque)
     nvic_state *s = (nvic_state *)opaque;
     uint32_t irq;
 
-    irq = gic_acknowledge_irq(&s->gic, 0);
+    irq = gic_acknowledge_irq(&s->gic, 0, MEMTXATTRS_UNSPECIFIED);
     if (irq == 1023)
         hw_error("Interrupt but no vector\n");
     if (irq >= 32)
@@ -135,7 +145,7 @@ void armv7m_nvic_complete_irq(void *opaque, int irq)
     nvic_state *s = (nvic_state *)opaque;
     if (irq >= 16)
         irq += 16;
-    gic_complete_irq(&s->gic, 0, irq);
+    gic_complete_irq(&s->gic, 0, irq, MEMTXATTRS_UNSPECIFIED);
 }
 
 static uint32_t nvic_readl(nvic_state *s, uint32_t offset)
@@ -176,25 +186,24 @@ static uint32_t nvic_readl(nvic_state *s, uint32_t offset)
         return cpu->midr;
     case 0xd04: /* Interrupt Control State.  */
         /* VECTACTIVE */
-        val = s->gic.running_irq[0];
+        cpu = ARM_CPU(current_cpu);
+        val = cpu->env.v7m.exception;
         if (val == 1023) {
             val = 0;
         } else if (val >= 32) {
             val -= 16;
         }
-        /* RETTOBASE */
-        if (s->gic.running_irq[0] == 1023
-                || s->gic.last_active[s->gic.running_irq[0]][0] == 1023) {
-            val |= (1 << 11);
-        }
         /* VECTPENDING */
         if (s->gic.current_pending[0] != 1023)
             val |= (s->gic.current_pending[0] << 12);
-        /* ISRPENDING */
+        /* ISRPENDING and RETTOBASE */
         for (irq = 32; irq < s->num_irq; irq++) {
             if (s->gic.irq_state[irq].pending) {
                 val |= (1 << 22);
                 break;
+            }
+            if (irq != cpu->env.v7m.exception && s->gic.irq_state[irq].active) {
+                val |= (1 << 11);
             }
         }
         /* PENDSTSET */
@@ -340,10 +349,13 @@ static void nvic_writel(nvic_state *s, uint32_t offset, uint32_t value)
         break;
     case 0xd0c: /* Application Interrupt/Reset Control.  */
         if ((value >> 16) == 0x05fa) {
+            if (value & 4) {
+                qemu_irq_pulse(s->sysresetreq);
+            }
             if (value & 2) {
                 qemu_log_mask(LOG_UNIMP, "VECTCLRACTIVE unimplemented\n");
             }
-            if (value & 5) {
+            if (value & 1) {
                 qemu_log_mask(LOG_UNIMP, "AIRCR system reset unimplemented\n");
             }
             if (value & 0x700) {
@@ -450,7 +462,7 @@ static const VMStateDescription vmstate_nvic = {
         VMSTATE_UINT32(systick.control, nvic_state),
         VMSTATE_UINT32(systick.reload, nvic_state),
         VMSTATE_INT64(systick.tick, nvic_state),
-        VMSTATE_TIMER(systick.timer, nvic_state),
+        VMSTATE_TIMER_PTR(systick.timer, nvic_state),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -465,10 +477,10 @@ static void armv7m_nvic_reset(DeviceState *dev)
      * as enabled by default, and with a priority mask which allows
      * all interrupts through.
      */
-    s->gic.cpu_enabled[0] = true;
+    s->gic.cpu_ctlr[0] = GICC_CTLR_EN_GRP0;
     s->gic.priority_mask[0] = 0x100;
     /* The NVIC as a whole is always enabled. */
-    s->gic.enabled = true;
+    s->gic.ctlr = 1;
     systick_reset(s);
 }
 
@@ -488,7 +500,7 @@ static void armv7m_nvic_realize(DeviceState *dev, Error **errp)
         error_propagate(errp, local_err);
         return;
     }
-    gic_init_irqs_and_distributor(&s->gic, s->num_irq);
+    gic_init_irqs_and_distributor(&s->gic);
     /* The NVIC and system controller register area looks like this:
      *  0..0xff : system control registers, including systick
      *  0x100..0xcff : GIC-like registers
@@ -527,11 +539,14 @@ static void armv7m_nvic_instance_init(Object *obj)
      * value in the GICState struct.
      */
     GICState *s = ARM_GIC_COMMON(obj);
+    DeviceState *dev = DEVICE(obj);
+    nvic_state *nvic = NVIC(obj);
     /* The ARM v7m may have anything from 0 to 496 external interrupt
      * IRQ lines. We default to 64. Other boards may differ and should
      * set the num-irq property appropriately.
      */
     s->num_irq = 64;
+    qdev_init_gpio_out_named(dev, &nvic->sysresetreq, "SYSRESETREQ", 1);
 }
 
 static void armv7m_nvic_class_init(ObjectClass *klass, void *data)

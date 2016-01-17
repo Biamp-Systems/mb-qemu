@@ -61,18 +61,26 @@ static TCGv cpu_R[NUM_CORE_REGS];
 
 #include "exec/gen-icount.h"
 
-/* generate intermediate code for basic block 'tb'.  */
-static void gen_intermediate_code_internal(
-    Nios2CPU *cpu, TranslationBlock *tb, int search_pc)
+static inline void t_gen_raise_exception(DisasContext *dc, uint32_t index)
 {
+    TCGv_i32 tmp = tcg_const_i32(index);
+
+    tcg_gen_movi_tl(cpu_R[R_PC], dc->pc);
+    gen_helper_raise_exception(cpu_env, tmp);
+    tcg_temp_free_i32(tmp);
+    dc->is_jmp = DISAS_UPDATE;
+}
+
+/* generate intermediate code for basic block 'tb'.  */
+void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
+{
+    Nios2CPU *cpu = nios2_env_get_cpu(env);
     CPUState *cs = CPU(cpu);
-    CPUNios2State *env = &cpu->env;
+    uint32_t pc_start = tb->pc;
     DisasContext dc1, *dc = &dc1;
     int num_insns;
     int max_insns;
     uint32_t next_page_start;
-    int j, lj = -1;
-    uint16_t *gen_opc_end = tcg_ctx.gen_opc_buf + OPC_MAX_SIZE;
 
     /* Initialize DC */
     dc->cpu_env = cpu_env;
@@ -80,7 +88,7 @@ static void gen_intermediate_code_internal(
     dc->is_jmp  = DISAS_NEXT;
     dc->pc      = tb->pc;
     dc->tb      = tb;
-    dc->mem_idx = cpu_mmu_index(env);
+    dc->mem_idx = cpu_mmu_index(env, false);
 
     /* Dump the CPU state to the log */
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
@@ -89,32 +97,43 @@ static void gen_intermediate_code_internal(
     }
 
     /* Set up instruction counts */
+    next_page_start = (tb->pc & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
+
     num_insns = 0;
     max_insns = tb->cflags & CF_COUNT_MASK;
     if (max_insns == 0) {
         max_insns = CF_COUNT_MASK;
     }
-    next_page_start = (tb->pc & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
+    if (max_insns > TCG_MAX_INSNS) {
+        max_insns = TCG_MAX_INSNS;
+    }
 
-    gen_tb_start();
+    gen_tb_start(tb);
     do {
-        /* Mark instruction start with associated PC */
-        if (search_pc) {
-            j = tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf;
-            if (lj < j) {
-                lj++;
-                while (lj < j) {
-                    tcg_ctx.gen_opc_instr_start[lj++] = 0;
-                }
-            }
-            tcg_ctx.gen_opc_pc[lj] = dc->pc;
-            tcg_ctx.gen_opc_instr_start[lj] = 1;
-            tcg_ctx.gen_opc_icount[lj] = num_insns;
+        tcg_gen_insn_start(dc->pc);
+        num_insns++;
+
+#if SIM_COMPAT
+        if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
+            tcg_gen_movi_tl(cpu_SR[SR_PC], dc->pc);
+            gen_helper_debug();
+        }
+#endif
+
+        if (unlikely(cpu_breakpoint_test(cs, dc->pc, BP_ANY))) {
+            t_gen_raise_exception(dc, EXCP_DEBUG);
+            dc->is_jmp = DISAS_UPDATE;
+            /* The address covered by the breakpoint must be included in
+               [tb->pc, tb->pc + tb->size) in order to for it to be
+               properly cleared -- thus we increment the PC here so that
+               the logic setting tb->size below does the right thing.  */
+            dc->pc += 4;
+            break;
         }
 
         LOG_DIS("%8.8x:\t", dc->pc);
 
-        if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO)) {
+        if (num_insns == max_insns && (tb->cflags & CF_LAST_IO)) {
             gen_io_start();
         }
 
@@ -122,13 +141,13 @@ static void gen_intermediate_code_internal(
         handle_instruction(dc, env);
 
         dc->pc += 4;
-        num_insns++;
 
         /* Translation stops when a conditional branch is encountered.
          * Otherwise the subsequent code could get translated several times.
          * Also stop translation when a page boundary is reached.  This
          * ensures prefetch aborts occur at the right place.  */
-    } while (!dc->is_jmp && tcg_ctx.gen_opc_ptr < gen_opc_end &&
+    } while (!dc->is_jmp &&
+             !tcg_op_buf_full() &&
              !cs->singlestep_enabled &&
              !singlestep &&
              dc->pc < next_page_start &&
@@ -160,39 +179,19 @@ static void gen_intermediate_code_internal(
 
     /* End off the block */
     gen_tb_end(tb, num_insns);
-    *tcg_ctx.gen_opc_ptr = INDEX_op_end;
 
-    /* Mark instruction starts for the final generated instruction */
-    if (search_pc) {
-        j = tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf;
-        lj++;
-        while (lj <= j) {
-            tcg_ctx.gen_opc_instr_start[lj++] = 0;
-        }
-    } else {
-        tb->size = dc->pc - tb->pc;
-        tb->icount = num_insns;
-    }
+    tb->size = dc->pc - pc_start;
+    tb->icount = num_insns;
 
 #ifdef DEBUG_DISAS
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
         qemu_log("----------------\n");
         qemu_log("IN: %s\n", lookup_symbol(tb->pc));
-        log_target_disas(env, tb->pc, dc->pc - tb->pc, 0);
-        qemu_log("\nisize=%d osize=%td\n",
-                 dc->pc - tb->pc, tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf);
+        log_target_disas(cs, tb->pc, dc->pc - tb->pc, 0);
+        qemu_log("\nisize=%d osize=%d\n",
+                 dc->pc - pc_start, tcg_op_buf_count());
     }
 #endif
-}
-
-void gen_intermediate_code (CPUNios2State *env, struct TranslationBlock *tb)
-{
-    gen_intermediate_code_internal(nios2_env_get_cpu(env), tb, false);
-}
-
-void gen_intermediate_code_pc (CPUNios2State *env, struct TranslationBlock *tb)
-{
-    gen_intermediate_code_internal(nios2_env_get_cpu(env), tb, true);
 }
 
 void nios2_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
@@ -229,6 +228,8 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
 
     cpu = NIOS2_CPU(object_new(TYPE_NIOS2_CPU));
 
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
+
     cpu->env.reset_addr = RESET_ADDRESS;
     cpu->env.exception_addr = EXCEPTION_ADDRESS;
     cpu->env.fast_tlb_miss_addr = FAST_TLB_MISS_ADDRESS;
@@ -247,8 +248,9 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
     return cpu;
 }
 
-void restore_state_to_opc(CPUNios2State *env, TranslationBlock *tb, int pc_pos)
+void restore_state_to_opc(CPUNios2State *env, TranslationBlock *tb,
+                          target_ulong *data)
 {
-    env->regs[R_PC] = tcg_ctx.gen_opc_pc[pc_pos];
+    env->regs[R_PC] = data[0];
 }
 
