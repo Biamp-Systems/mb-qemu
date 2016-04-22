@@ -64,8 +64,11 @@ do {                                                                    \
  * This way we will never overlap with our own libraries or binaries or stack
  * or anything else that QEMU maps.
  */
-# ifdef TARGET_MIPS
-/* MIPS only supports 31 bits of virtual address space for user space */
+# if defined(TARGET_MIPS) || defined(TARGET_NIOS2)
+/*
+ * MIPS only supports 31 bits of virtual address space for user space.
+ * Nios2 also only supports 31 bits.
+ */
 unsigned long reserved_va = 0x77000000;
 # else
 unsigned long reserved_va = 0xf7000000;
@@ -2679,6 +2682,163 @@ error:
 }
 #endif
 
+#ifdef TARGET_NIOS2
+
+void cpu_loop(CPUNios2State *env)
+{
+    CPUState *cs = ENV_GET_CPU(env);
+    target_siginfo_t info;
+    int trapnr, gdbsig, ret;
+
+    for (;;) {
+        cpu_exec_start(cs);
+        trapnr = cpu_nios2_exec(cs);
+        cpu_exec_end(cs);
+        gdbsig = 0;
+
+        switch (trapnr) {
+#if 0 /* FIXME FIXME FIXME */
+        case EXCP_RESET:
+            qemu_log_mask(CPU_LOG_INT, "\nReset request, exit, pc is %#x\n", env->regs[R_PC]);
+            exit(EXIT_FAILURE);
+            break;
+        case EXCP_BUSERR:
+            qemu_log_mask(CPU_LOG_INT, "\nBus error, exit, pc is %#x\n", env->regs[R_PC]);
+            gdbsig = TARGET_SIGBUS;
+            break;
+        case EXCP_DPF:
+        case EXCP_IPF:
+            cpu_dump_state(cs, stderr, fprintf, 0);
+            gdbsig = TARGET_SIGSEGV;
+            break;
+        case EXCP_TICK:
+            qemu_log_mask(CPU_LOG_INT, "\nTick time interrupt pc is %#x\n", env->regs[R_PC]);
+            break;
+        case EXCP_ALIGN:
+            qemu_log_mask(CPU_LOG_INT, "\nAlignment pc is %#x\n", env->regs[R_PC]);
+            gdbsig = TARGET_SIGBUS;
+            break;
+        case EXCP_ILLEGAL:
+            qemu_log_mask(CPU_LOG_INT, "\nIllegal instructionpc is %#x\n", env->regs[R_PC]);
+            gdbsig = TARGET_SIGILL;
+            break;
+        case EXCP_INT:
+            qemu_log_mask(CPU_LOG_INT, "\nExternal interruptpc is %#x\n", env->regs[R_PC]);
+            break;
+        case EXCP_DTLBMISS:
+        case EXCP_ITLBMISS:
+            qemu_log_mask(CPU_LOG_INT, "\nTLB miss\n");
+            break;
+        case EXCP_RANGE:
+            qemu_log_mask(CPU_LOG_INT, "\nRange\n");
+            gdbsig = TARGET_SIGSEGV;
+            break;
+        case EXCP_SYSCALL:
+            env->pc += 4;   /* 0xc00; */
+            env->gpr[11] = do_syscall(env,
+                                      env->gpr[11], /* return value       */
+                                      env->gpr[3],  /* r3 - r7 are params */
+                                      env->gpr[4],
+                                      env->gpr[5],
+                                      env->gpr[6],
+                                      env->gpr[7],
+                                      env->gpr[8], 0, 0);
+            break;
+        case EXCP_FPE:
+            qemu_log_mask(CPU_LOG_INT, "\nFloating point error\n");
+            break;
+        case EXCP_TRAP:
+            qemu_log_mask(CPU_LOG_INT, "\nTrap\n");
+            gdbsig = TARGET_SIGTRAP;
+            break;
+        case EXCP_NR:
+            qemu_log_mask(CPU_LOG_INT, "\nNR\n");
+            break;
+#endif
+        case EXCP_INTERRUPT:
+            /* just indicate that signals should be handled asap */
+            break;
+        case EXCP_TRAP:
+            if (env->regs[R_AT] == 0) {
+                abi_long ret;
+                qemu_log_mask(CPU_LOG_INT, "\nSyscall\n");
+
+                ret = do_syscall(env, env->regs[2],
+                                 env->regs[4], env->regs[5], env->regs[6],
+                                 env->regs[7], env->regs[8], env->regs[9],
+                                 0, 0);
+
+		if (env->regs[2] == 0)	/* FIXME FIXME FIXME ... syscall 0 hack */
+			ret = 0;
+
+                env->regs[2] = abs(ret);
+		/* Return value is 0..4096 */
+                env->regs[7] = (ret > 0xfffffffffffff000ULL);
+                env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
+                env->regs[CR_STATUS] &= ~0x3;
+                env->regs[R_EA] = env->regs[R_PC] + 4;
+                env->regs[R_PC] += 4;
+		break;
+            } else {
+                qemu_log_mask(CPU_LOG_INT, "\nTrap\n");
+
+                env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
+                env->regs[CR_STATUS] &= ~0x3;
+                env->regs[R_EA] = env->regs[R_PC] + 4;
+                env->regs[R_PC] = env->exception_addr;
+
+                gdbsig = TARGET_SIGTRAP;
+                break;
+            }
+        case 0xaa:
+            switch (env->regs[R_PC]) {
+//              case 0x1000:	/* __kuser_helper_version */
+		case 0x1004:	/* __kuser_cmpxchg */
+                    start_exclusive();
+		    if (env->regs[4] & 0x3)
+		        goto kuser_fail;
+                    ret = get_user_u32(env->regs[2], env->regs[4]);
+                    if (ret) {
+                        end_exclusive();
+                        goto kuser_fail;
+                    }
+                    env->regs[2] -= env->regs[5];
+                    if (env->regs[2] == 0) {
+                        put_user_u32(env->regs[6], env->regs[4]);
+                    }
+                    end_exclusive();
+                    env->regs[R_PC] = env->regs[R_RA];
+                    break;
+//		case 0x1040:	/* __kuser_sigtramp */
+kuser_fail:
+                default:
+                    info.si_signo = TARGET_SIGSEGV;
+                    info.si_errno = 0;
+                    /* XXX: check env->error_code */
+                    info.si_code = TARGET_SEGV_MAPERR;
+                    info._sifields._sigfault._addr = env->regs[R_PC];
+                    queue_signal(env, info.si_signo, &info);
+            }
+	    break;
+        default:
+            EXCP_DUMP(env, "\nqemu: unhandled CPU exception %#x - aborting\n",
+                     trapnr);
+            gdbsig = TARGET_SIGILL;
+            break;
+        }
+        if (gdbsig) {
+            gdb_handlesig(cs, gdbsig);
+            if (gdbsig != TARGET_SIGTRAP) {
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        process_pending_signals(env);
+    }
+}
+
+#endif /* TARGET_NIOS2 */
+
 #ifdef TARGET_OPENRISC
 
 void cpu_loop(CPUOpenRISCState *env)
@@ -4610,6 +4770,36 @@ int main(int argc, char **argv, char **envp)
         if (regs->cp0_epc & 1) {
             env->hflags |= MIPS_HFLAG_M16;
         }
+    }
+#elif defined(TARGET_NIOS2)
+    {
+	env->regs[0] = 0;
+	env->regs[1] = regs->r1;
+	env->regs[2] = regs->r2;
+	env->regs[3] = regs->r3;
+	env->regs[4] = regs->r4;
+	env->regs[5] = regs->r5;
+	env->regs[6] = regs->r6;
+	env->regs[7] = regs->r7;
+	env->regs[8] = regs->r8;
+	env->regs[9] = regs->r9;
+	env->regs[10] = regs->r10;
+	env->regs[11] = regs->r11;
+	env->regs[12] = regs->r12;
+	env->regs[13] = regs->r13;
+	env->regs[14] = regs->r14;
+	env->regs[15] = regs->r15;
+	// unsigned long  orig_r2;
+	env->regs[R_RA] = regs->ra;
+	env->regs[R_FP] = regs->fp;
+	env->regs[R_SP] = regs->sp;
+	env->regs[R_GP] = regs->gp;
+	env->regs[CR_ESTATUS] = regs->estatus;
+	env->regs[R_EA] = regs->ea;
+	// unsigned long  orig_r7;
+
+	/* Emulate eret when starting thread. */
+	env->regs[R_PC] = regs->ea;
     }
 #elif defined(TARGET_OPENRISC)
     {

@@ -3765,6 +3765,175 @@ long do_rt_sigreturn(CPUCRISState *env)
     return -TARGET_ENOSYS;
 }
 
+#elif defined(TARGET_NIOS2)
+
+struct target_sigcontext {
+    struct target_pt_regs regs;
+    abi_ulong oldmask;
+    abi_ulong usp;
+};
+
+struct target_ucontext {
+    abi_ulong tuc_flags;
+    abi_ulong tuc_link;
+    target_stack_t tuc_stack;
+    struct target_sigcontext tuc_mcontext;
+    target_sigset_t tuc_sigmask;   /* mask last for extensibility */
+};
+
+struct target_rt_sigframe {
+    abi_ulong pinfo;
+    uint64_t puc;
+    struct target_siginfo info;
+    struct target_sigcontext sc;
+    struct target_ucontext uc;
+    unsigned char retcode[16];  /* trampoline code */
+};
+
+/* This is the asm-generic/ucontext.h version */
+
+/* Set up a signal frame.  */
+
+static void setup_sigcontext(struct target_sigcontext *sc,
+                            CPUNios2State *regs,
+                            unsigned long mask)
+{
+    unsigned long usp = regs->regs[1];
+
+    /* copy the regs. they are first in sc so we can use sc directly */
+
+    /*copy_to_user(&sc, regs, sizeof(struct target_pt_regs));*/
+
+    /* Set the frametype to CRIS_FRAME_NORMAL for the execution of
+       the signal handler. The frametype will be restored to its previous
+       value in restore_sigcontext. */
+    /*regs->frametype = CRIS_FRAME_NORMAL;*/
+
+    /* then some other stuff */
+    __put_user(mask, &sc->oldmask);
+    __put_user(usp, &sc->usp);
+}
+
+static inline unsigned long align_sigframe(unsigned long sp)
+{
+    unsigned long i;
+    i = sp & ~3UL;
+    return i;
+}
+
+static inline abi_ulong get_sigframe(struct target_sigaction *ka,
+                                     CPUNios2State *regs,
+                                     size_t frame_size)
+{
+    unsigned long sp = regs->regs[1];
+    int onsigstack = on_sig_stack(sp);
+
+    /* redzone */
+    /* This is the X/Open sanctioned signal stack switching.  */
+    if ((ka->sa_flags & TARGET_SA_ONSTACK) != 0 && !onsigstack) {
+        sp = target_sigaltstack_used.ss_sp + target_sigaltstack_used.ss_size;
+    }
+
+    sp = align_sigframe(sp - frame_size);
+
+    /*
+     * If we are on the alternate signal stack and would overflow it, don't.
+     * Return an always-bogus address instead so we will die with SIGSEGV.
+     */
+
+    if (onsigstack && !likely(on_sig_stack(sp))) {
+        return -1L;
+    }
+
+    return sp;
+}
+
+static void setup_rt_frame(int sig, struct target_sigaction *ka,
+                           target_siginfo_t *info,
+                           target_sigset_t *set, CPUNios2State *env)
+{
+    int err = 0;
+    abi_ulong frame_addr;
+    unsigned long return_ip;
+    struct target_rt_sigframe *frame;
+    abi_ulong info_addr, uc_addr;
+
+    frame_addr = get_sigframe(ka, env, sizeof(*frame));
+    trace_user_setup_rt_frame(env, frame_addr);
+    if (!lock_user_struct(VERIFY_WRITE, frame, frame_addr, 0)) {
+        goto give_sigsegv;
+    }
+
+    info_addr = frame_addr + offsetof(struct target_rt_sigframe, info);
+    __put_user(info_addr, &frame->pinfo);
+    uc_addr = frame_addr + offsetof(struct target_rt_sigframe, uc);
+    __put_user(uc_addr, &frame->puc);
+
+    if (ka->sa_flags & SA_SIGINFO) {
+        tswap_siginfo(&frame->info, info);
+    }
+
+    /*err |= __clear_user(&frame->uc, offsetof(struct ucontext, uc_mcontext));*/
+    __put_user(0, &frame->uc.tuc_flags);
+    __put_user(0, &frame->uc.tuc_link);
+    __put_user(target_sigaltstack_used.ss_sp,
+               &frame->uc.tuc_stack.ss_sp);
+    __put_user(sas_ss_flags(env->regs[1]), &frame->uc.tuc_stack.ss_flags);
+    __put_user(target_sigaltstack_used.ss_size,
+               &frame->uc.tuc_stack.ss_size);
+    setup_sigcontext(&frame->sc, env, set->sig[0]);
+
+    /*err |= copy_to_user(frame->uc.tuc_sigmask, set, sizeof(*set));*/
+
+    /* trampoline - the desired return ip is the retcode itself */
+    return_ip = (unsigned long)&frame->retcode;
+    /* This is l.ori r11,r0,__NR_sigreturn, l.sys 1 */
+    __put_user(0xa960, (short *)(frame->retcode + 0));
+    __put_user(TARGET_NR_rt_sigreturn, (short *)(frame->retcode + 2));
+    __put_user(0x20000001, (unsigned long *)(frame->retcode + 4));
+    __put_user(0x15000000, (unsigned long *)(frame->retcode + 8));
+
+    if (err) {
+        goto give_sigsegv;
+    }
+
+    /* TODO what is the current->exec_domain stuff and invmap ? */
+
+    /* Set up registers for signal handler */
+    env->regs[R_PC] = (unsigned long)ka->_sa_handler; /* what we enter NOW */
+    env->regs[9] = (unsigned long)return_ip;     /* what we enter LATER */
+    env->regs[3] = (unsigned long)sig;           /* arg 1: signo */
+    env->regs[4] = (unsigned long)&frame->info;  /* arg 2: (siginfo_t*) */
+    env->regs[5] = (unsigned long)&frame->uc;    /* arg 3: ucontext */
+
+    /* actually move the usp to reflect the stacked frame */
+    env->regs[1] = (unsigned long)frame;
+
+    return;
+
+give_sigsegv:
+    unlock_user_struct(frame, frame_addr, 1);
+    if (sig == TARGET_SIGSEGV) {
+        ka->_sa_handler = TARGET_SIG_DFL;
+    }
+    force_sig(TARGET_SIGSEGV);
+}
+
+long do_sigreturn(CPUNios2State *env)
+{
+    trace_user_do_sigreturn(env, 0);
+    fprintf(stderr, "do_sigreturn: not implemented\n");
+    return -TARGET_ENOSYS;
+}
+
+long do_rt_sigreturn(CPUNios2State *env)
+{
+    trace_user_do_rt_sigreturn(env, 0);
+    fprintf(stderr, "do_rt_sigreturn: not implemented\n");
+    return -TARGET_ENOSYS;
+}
+/* TARGET_NIOS2 */
+
 #elif defined(TARGET_OPENRISC)
 
 struct target_sigcontext {
@@ -5805,7 +5974,8 @@ void process_pending_signals(CPUArchState *cpu_env)
 #endif
         /* prepare the stack frame of the virtual CPU */
 #if defined(TARGET_ABI_MIPSN32) || defined(TARGET_ABI_MIPSN64) \
-    || defined(TARGET_OPENRISC) || defined(TARGET_TILEGX)
+    || defined(TARGET_OPENRISC) || defined(TARGET_TILEGX) \
+    || defined(TARGET_NIOS2)
         /* These targets do not have traditional signals.  */
         setup_rt_frame(sig, sa, &q->info, &target_old_set, cpu_env);
 #else
