@@ -5675,6 +5675,8 @@ case "$target_name" in
   ;;
   moxie)
   ;;
+  nios2)
+  ;;
   or32)
     TARGET_ARCH=openrisc
     TARGET_BASE_ARCH=openrisc
@@ -5870,6 +5872,9 @@ for i in $ARCH $TARGET_BASE_ARCH ; do
   ;;
   moxie*)
     disas_config "MOXIE"
+  ;;
+  nios2)
+    disas_config "NIOS2"
   ;;
   or32)
     disas_config "OPENRISC"
