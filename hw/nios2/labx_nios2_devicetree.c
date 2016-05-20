@@ -19,6 +19,7 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/hw.h"
 #include "net/net.h"
@@ -27,6 +28,7 @@
 #include "hw/devices.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
+#include "target-nios2/cpu.h"
 #include "nios2.h"
 #include "hw/loader.h"
 #include "elf.h"
@@ -34,6 +36,7 @@
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
+#include "qapi/error.h"
 
 #include "hw/fdt/fdt_generic.h"
 #include "hw/fdt/fdt_generic_devices.h"
@@ -139,10 +142,10 @@ static ram_addr_t get_dram_base(void *fdt)
     Error *errp = NULL;
 
     printf("DRAM base %08X, size %08X\n",
-        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
-        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 0, 0, &errp),
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 1, 0, &errp));
 
-    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
+    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 0, 0, &errp);
 }
 
 typedef void (*device_init_func_t)(FDTMachineInfo *fdti, const char *node_path, uint32_t offset);
@@ -192,15 +195,15 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
        the device-tree one */
 #if 0
     cpu->env.reset_addr =
-        qemu_fdt_getprop_cell(fdt, node_path, "ALTR,reset-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdt, node_path, "ALTR,reset-addr", NULL, 0, 0, &errp);
 #else
     cpu->env.reset_addr = 0xc0000000;
 #endif
 
     cpu->env.exception_addr =
-        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,exception-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,exception-addr", NULL, 0, 0, &errp);
     cpu->env.fast_tlb_miss_addr =
-        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,fast-tlb-miss-addr", 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,fast-tlb-miss-addr", NULL, 0, 0, &errp);
 
     /* reset again to use the new reset vector */
     cpu_reset(CPU(cpu));
@@ -312,12 +315,12 @@ static void labx_nios2_init(MachineState *machine)
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
                                &entry, &low, &high,
-                               0, EM_ALTERA_NIOS2, 0);
+                               0, EM_ALTERA_NIOS2, 0, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
             kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
                                    NULL, &entry, NULL, NULL,
-                                   0, EM_ALTERA_NIOS2, 0);
+                                   0, EM_ALTERA_NIOS2, 0, 0);
         }
         /* Always boot into physical ram.  */
         boot_info.bootstrap_pc = ddr_base + 0xc0000000 + (entry & 0x07ffffff);

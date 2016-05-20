@@ -15,6 +15,7 @@
  *
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "net/net.h"
@@ -36,7 +37,7 @@
 #define VMXNET3_MSIX_BAR_SIZE 0x2000
 #define MIN_BUF_SIZE 60
 
-/* Compatability flags for migration */
+/* Compatibility flags for migration */
 #define VMXNET3_COMPAT_FLAG_OLD_MSI_OFFSETS_BIT 0
 #define VMXNET3_COMPAT_FLAG_OLD_MSI_OFFSETS \
     (1 << VMXNET3_COMPAT_FLAG_OLD_MSI_OFFSETS_BIT)
@@ -340,7 +341,7 @@ typedef struct {
         uint32_t mcast_list_len;
         uint32_t mcast_list_buff_size; /* needed for live migration. */
 
-        /* Compatability flags for migration */
+        /* Compatibility flags for migration */
         uint32_t compat_flags;
 } VMXNET3State;
 
@@ -522,7 +523,7 @@ vmxnet3_dec_rx_completion_counter(VMXNET3State *s, int qidx)
     vmxnet3_ring_dec(&s->rxq_descr[qidx].comp_ring);
 }
 
-static void vmxnet3_complete_packet(VMXNET3State *s, int qidx, uint32 tx_ridx)
+static void vmxnet3_complete_packet(VMXNET3State *s, int qidx, uint32_t tx_ridx)
 {
     struct Vmxnet3_TxCompDesc txcq_descr;
 

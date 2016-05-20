@@ -1,9 +1,13 @@
+#include "qemu/osdep.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include "hw/hw.h"
 #include "hw/boards.h"
 #include "qemu/error-report.h"
 #include "sysemu/kvm.h"
 #include "kvm_arm.h"
 #include "internals.h"
+#include "migration/cpu.h"
 
 static bool vfp_needed(void *opaque)
 {
@@ -172,9 +176,7 @@ static int get_cpsr(QEMUFile *f, void *opaque, size_t size)
         return 0;
     }
 
-    /* Avoid mode switch when restoring CPSR */
-    env->uncached_cpsr = val & CPSR_M;
-    cpsr_write(env, val, 0xffffffff);
+    cpsr_write(env, val, 0xffffffff, CPSRWriteRaw);
     return 0;
 }
 

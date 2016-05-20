@@ -22,10 +22,14 @@
 #include <string.h>
 #include <assert.h>
 
-#include "config.h"
+#include "qemu/osdep.h"
+#include "qemu-common.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "qemu/host-utils.h"
+
+#include "exec/log.h"
 
 #if defined(CONFIG_USER_ONLY)
 
@@ -41,7 +45,10 @@ int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
                                int rw, int mmu_idx, int is_softmmu)
 {
     cs->exception_index = 0xaa;
-    cpu_dump_state(cs, stderr, fprintf, 0);
+    /* Page 0x1000 is kuser helper */
+    if (address < 0x1000 || address >= 0x2000) {
+        cpu_dump_state(cs, stderr, fprintf, 0);
+    }
     return 1;
 }
 
@@ -75,7 +82,6 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         if ((env->regs[CR_STATUS] & CR_STATUS_EH) == 0) {
             qemu_log_mask(CPU_LOG_INT, "TLB MISS (fast) at pc=%x\n",
                           env->regs[R_PC]);
-            log_cpu_state(cs, 0);
 
             /* Fast TLB miss */
             /* Variation from the spec. Table 3-35 of the cpu reference shows
@@ -114,7 +120,6 @@ void nios2_cpu_do_interrupt(CPUState *cs)
     case EXCP_TLBW:
     case EXCP_TLBX:
         qemu_log_mask(CPU_LOG_INT, "TLB PERM at pc=%x\n", env->regs[R_PC]);
-        log_cpu_state(cs, 0);
 
         env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
         env->regs[CR_STATUS] |= CR_STATUS_EH;

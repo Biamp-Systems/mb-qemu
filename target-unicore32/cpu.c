@@ -12,9 +12,12 @@
  * or (at your option) any later version.
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "qemu-common.h"
 #include "migration/vmstate.h"
+#include "exec/exec-all.h"
 
 static void uc32_cpu_set_pc(CPUState *cs, vaddr value)
 {

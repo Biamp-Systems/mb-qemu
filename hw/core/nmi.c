@@ -19,9 +19,16 @@
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
+#include "qom/cpu.h"
 #include "hw/nmi.h"
+#include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 #include "monitor/monitor.h"
+
+#if defined(TARGET_I386)
+#include "cpu.h"
+#endif
 
 struct do_nmi_s {
     int cpu_index;

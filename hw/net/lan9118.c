@@ -10,11 +10,13 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "net/net.h"
 #include "hw/devices.h"
 #include "sysemu/sysemu.h"
 #include "hw/ptimer.h"
+#include "qemu/log.h"
 /* For crc32 */
 #include <zlib.h>
 

@@ -39,6 +39,7 @@
 #include "fdt_generic_util.h"
 #include "net/net.h"
 #include "block/block.h"
+#include "qapi/error.h"
 
 /* FIXME: wrap direct calls into libfdt */
 
@@ -186,7 +187,7 @@ qemu_irq fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
         err = &errl;
     }
     intc_phandle = qemu_fdt_getprop_cell(fdt, node_path, "interrupt-parent",
-                                                                0, true, &errp);
+                                         NULL, 0, true, &errp);
     if (errp) {
         goto fail;
     }
@@ -195,12 +196,13 @@ qemu_irq fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
         goto fail;
     }
     intc_cells = qemu_fdt_getprop_cell(fdt, intc_node_path,
-                                       "#interrupt-cells", 0, false, &errp);
+                                       "#interrupt-cells", NULL, 0, false,
+				       &errp);
     if (errp) {
         goto fail;
     }
-    idx = qemu_fdt_getprop_cell(fdt, node_path, "interrupts",
-                                        intc_cells * irq_idx, false, &errp);
+    idx = qemu_fdt_getprop_cell(fdt, node_path, "interrupts", NULL,
+                                intc_cells * irq_idx, false, &errp);
     if (errp) {
         goto fail;
     }
@@ -354,7 +356,7 @@ hwaddr fdt_get_parent_base(const char *node_path,
             Error *errp = NULL;
             int64_t parent_base = 0;
             parent_base = qemu_fdt_getprop_cell(fdti->fdt, parent, "reg",
-                                                    0, false, &errp);
+                                                NULL, 0, false, &errp);
             if (errp == NULL) {
                 base += (hwaddr)parent_base;
             }
@@ -451,7 +453,7 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
 
     qdev_init_nofail(dev);
     /* map slave attachment */
-    base = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", 0, false, &error_abort);
+    base = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", NULL, 0, false, &error_abort);
 
     base += fdt_get_parent_base(node_path, fdti);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);

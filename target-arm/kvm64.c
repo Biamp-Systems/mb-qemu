@@ -9,8 +9,7 @@
  *
  */
 
-#include <stdio.h>
-#include <sys/types.h>
+#include "qemu/osdep.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
@@ -18,8 +17,8 @@
 #include <linux/elf.h>
 #include <linux/kvm.h>
 
-#include "config-host.h"
 #include "qemu-common.h"
+#include "cpu.h"
 #include "qemu/timer.h"
 #include "qemu/error-report.h"
 #include "qemu/host-utils.h"
@@ -27,7 +26,6 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
 #include "kvm_arm.h"
-#include "cpu.h"
 #include "internals.h"
 #include "hw/arm/arm.h"
 
@@ -724,8 +722,7 @@ int kvm_arch_get_registers(CPUState *cs)
     if (is_a64(env)) {
         pstate_write(env, val);
     } else {
-        env->uncached_cpsr = val & CPSR_M;
-        cpsr_write(env, val, 0xffffffff);
+        cpsr_write(env, val, 0xffffffff, CPSRWriteRaw);
     }
 
     /* KVM puts SP_EL0 in regs.sp and SP_EL1 in regs.sp_el1. On the

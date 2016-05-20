@@ -22,7 +22,8 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include "config.h"
+#include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
 

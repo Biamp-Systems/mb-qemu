@@ -27,7 +27,6 @@
 /* cpu_openrisc_map_address_* in CPUOpenRISCTLBContext need this decl.  */
 struct OpenRISCCPU;
 
-#include "config.h"
 #include "qemu-common.h"
 #include "exec/cpu-defs.h"
 #include "fpu/softfloat.h"
@@ -393,7 +392,7 @@ int cpu_openrisc_get_phys_data(OpenRISCCPU *cpu,
 
 static inline void cpu_get_tb_cpu_state(CPUOpenRISCState *env,
                                         target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+                                        target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->pc;
     *cs_base = 0;
@@ -410,7 +409,5 @@ static inline int cpu_mmu_index(CPUOpenRISCState *env, bool ifetch)
 }
 
 #define CPU_INTERRUPT_TIMER   CPU_INTERRUPT_TGT_INT_0
-
-#include "exec/exec-all.h"
 
 #endif /* CPU_OPENRISC_H */

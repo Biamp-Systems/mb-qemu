@@ -8,21 +8,21 @@
  *
  */
 
-#include <stdio.h>
-#include <sys/types.h>
+#include "qemu/osdep.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
 #include <linux/kvm.h>
 
 #include "qemu-common.h"
+#include "cpu.h"
 #include "qemu/timer.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
 #include "kvm_arm.h"
-#include "cpu.h"
 #include "internals.h"
 #include "hw/arm/arm.h"
+#include "qemu/log.h"
 
 static inline void set_feature(uint64_t *features, int feature)
 {
@@ -429,7 +429,7 @@ int kvm_arch_get_registers(CPUState *cs)
     if (ret) {
         return ret;
     }
-    cpsr_write(env, cpsr, 0xffffffff);
+    cpsr_write(env, cpsr, 0xffffffff, CPSRWriteRaw);
 
     /* Make sure the current mode regs are properly set */
     mode = env->uncached_cpsr & CPSR_M;

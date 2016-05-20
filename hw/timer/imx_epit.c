@@ -12,9 +12,11 @@
  *
  */
 
+#include "qemu/osdep.h"
 #include "hw/timer/imx_epit.h"
 #include "hw/misc/imx_ccm.h"
 #include "qemu/main-loop.h"
+#include "qemu/log.h"
 
 #ifndef DEBUG_IMX_EPIT
 #define DEBUG_IMX_EPIT 0
@@ -51,10 +53,10 @@ static char const *imx_epit_reg_name(uint32_t reg)
  * These are typical.
  */
 static const IMXClk imx_epit_clocks[] =  {
-    NOCLK,    /* 00 disabled */
-    CLK_IPG,  /* 01 ipg_clk, ~532MHz */
-    CLK_IPG,  /* 10 ipg_clk_highfreq */
-    CLK_32k,  /* 11 ipg_clk_32k -- ~32kHz */
+    CLK_NONE,      /* 00 disabled */
+    CLK_IPG,       /* 01 ipg_clk, ~532MHz */
+    CLK_IPG_HIGH,  /* 10 ipg_clk_highfreq */
+    CLK_32k,       /* 11 ipg_clk_32k -- ~32kHz */
 };
 
 /*

@@ -11,8 +11,10 @@
  *
  */
 
+#include "qemu/osdep.h"
 #include "hw/virtio/virtio.h"
 #include "hw/i386/pc.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/iov.h"
 #include "qemu/sockets.h"
@@ -1586,7 +1588,7 @@ static int v9fs_xattr_read(V9fsState *s, V9fsPDU *pdu, V9fsFidState *fidp,
     int read_count;
     int64_t xattr_len;
     V9fsVirtioState *v = container_of(s, V9fsVirtioState, state);
-    VirtQueueElement *elem = &v->elems[pdu->idx];
+    VirtQueueElement *elem = v->elems[pdu->idx];
 
     xattr_len = fidp->fs.xattr.len;
     read_count = xattr_len - off;
@@ -3370,7 +3372,7 @@ static void __attribute__((__constructor__)) v9fs_set_fd_limit(void)
 {
     struct rlimit rlim;
     if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {
-        fprintf(stderr, "Failed to get the resource limit\n");
+        error_report("Failed to get the resource limit");
         exit(1);
     }
     open_fd_hw = rlim.rlim_cur - MIN(400, rlim.rlim_cur/3);

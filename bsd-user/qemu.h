@@ -17,15 +17,13 @@
 #ifndef QEMU_H
 #define QEMU_H
 
-#include <signal.h>
-#include <string.h>
 
 #include "cpu.h"
+#include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
 
 #undef DEBUG_REMAP
 #ifdef DEBUG_REMAP
-#include <stdlib.h>
 #endif /* DEBUG_REMAP */
 
 #include "exec/user/abitypes.h"
@@ -38,7 +36,7 @@ enum BSDType {
 extern enum BSDType bsd_type;
 
 #include "syscall_defs.h"
-#include "syscall.h"
+#include "target_syscall.h"
 #include "target_signal.h"
 #include "exec/gdbstub.h"
 

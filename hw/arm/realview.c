@@ -7,6 +7,10 @@
  * This code is licensed under the GPL.
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include "hw/sysbus.h"
 #include "hw/arm/arm.h"
 #include "hw/arm/primecell.h"
@@ -456,4 +460,4 @@ static void realview_machine_init(void)
     type_register_static(&realview_pbx_a9_type);
 }
 
-machine_init(realview_machine_init)
+type_init(realview_machine_init)

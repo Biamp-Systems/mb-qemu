@@ -25,22 +25,25 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "net/net.h"
 #include "hw/block/flash.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
+#include "target-microblaze/cpu.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
+#include "qapi/error.h"
 
 #include "hw/fdt/fdt_generic_util.h"
 #include "hw/fdt/fdt_generic_devices.h"
 
 #include "boot.h"
 
-#define VAL(name) qemu_fdt_getprop_cell(fdt, node_path, name, 0, false, \
+#define VAL(name) qemu_fdt_getprop_cell(fdt, node_path, name, NULL, 0, false, \
                                                 NULL)
 
 static void
@@ -327,9 +330,9 @@ static void microblaze_generic_fdt_init(MachineState *machine)
     /* find memory node */
     /* FIXME it could be good to fix case when you don't find memory node */
     qemu_fdt_get_node_by_name(fdt, node_path, "memory@");
-    ram_base = qemu_fdt_getprop_cell(fdt, node_path, "reg", 0,
+    ram_base = qemu_fdt_getprop_cell(fdt, node_path, "reg", NULL, 0,
                                             false, &error_abort);
-    ram_size = qemu_fdt_getprop_cell(fdt, node_path, "reg", 1,
+    ram_size = qemu_fdt_getprop_cell(fdt, node_path, "reg", NULL, 1,
                                             false, &error_abort);
 
     /* FIXME: instantiate from FDT like evrything else */

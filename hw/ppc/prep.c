@@ -21,6 +21,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
+#include "cpu.h"
 #include "hw/hw.h"
 #include "hw/timer/m48t59.h"
 #include "hw/i386/pc.h"
@@ -45,6 +47,7 @@
 #include "exec/address-spaces.h"
 #include "trace.h"
 #include "elf.h"
+#include "qemu/cutils.h"
 
 /* SMP is not enabled, for now */
 #define MAX_CPUS 1

@@ -17,9 +17,11 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "disas/disas.h"
 #include "exec/helper-proto.h"
+#include "exec/exec-all.h"
 #include "tcg-op.h"
 
 #include "exec/cpu_ldst.h"
@@ -28,6 +30,7 @@
 #include "exec/helper-gen.h"
 
 #include "trace-tcg.h"
+#include "exec/log.h"
 
 
 #define DISAS_LM32 1
@@ -42,7 +45,7 @@
 
 #define MEM_INDEX 0
 
-static TCGv_ptr cpu_env;
+static TCGv_env cpu_env;
 static TCGv cpu_R[32];
 static TCGv cpu_pc;
 static TCGv cpu_ie;
@@ -131,16 +134,25 @@ static inline void t_gen_illegal_insn(DisasContext *dc)
     gen_helper_ill(cpu_env);
 }
 
+static inline bool use_goto_tb(DisasContext *dc, target_ulong dest)
+{
+    if (unlikely(dc->singlestep_enabled)) {
+        return false;
+    }
+
+#ifndef CONFIG_USER_ONLY
+    return (dc->tb->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK);
+#else
+    return true;
+#endif
+}
+
 static void gen_goto_tb(DisasContext *dc, int n, target_ulong dest)
 {
-    TranslationBlock *tb;
-
-    tb = dc->tb;
-    if ((tb->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK) &&
-            likely(!dc->singlestep_enabled)) {
+    if (use_goto_tb(dc, dest)) {
         tcg_gen_goto_tb(n);
         tcg_gen_movi_tl(cpu_pc, dest);
-        tcg_gen_exit_tb((uintptr_t)tb + n);
+        tcg_gen_exit_tb((uintptr_t)dc->tb + n);
     } else {
         tcg_gen_movi_tl(cpu_pc, dest);
         if (dc->singlestep_enabled) {
@@ -1191,48 +1203,48 @@ void lm32_translate_init(void)
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
 
     for (i = 0; i < ARRAY_SIZE(cpu_R); i++) {
-        cpu_R[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_R[i] = tcg_global_mem_new(cpu_env,
                           offsetof(CPULM32State, regs[i]),
                           regnames[i]);
     }
 
     for (i = 0; i < ARRAY_SIZE(cpu_bp); i++) {
-        cpu_bp[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_bp[i] = tcg_global_mem_new(cpu_env,
                           offsetof(CPULM32State, bp[i]),
                           regnames[32+i]);
     }
 
     for (i = 0; i < ARRAY_SIZE(cpu_wp); i++) {
-        cpu_wp[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_wp[i] = tcg_global_mem_new(cpu_env,
                           offsetof(CPULM32State, wp[i]),
                           regnames[36+i]);
     }
 
-    cpu_pc = tcg_global_mem_new(TCG_AREG0,
+    cpu_pc = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, pc),
                     "pc");
-    cpu_ie = tcg_global_mem_new(TCG_AREG0,
+    cpu_ie = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, ie),
                     "ie");
-    cpu_icc = tcg_global_mem_new(TCG_AREG0,
+    cpu_icc = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, icc),
                     "icc");
-    cpu_dcc = tcg_global_mem_new(TCG_AREG0,
+    cpu_dcc = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, dcc),
                     "dcc");
-    cpu_cc = tcg_global_mem_new(TCG_AREG0,
+    cpu_cc = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, cc),
                     "cc");
-    cpu_cfg = tcg_global_mem_new(TCG_AREG0,
+    cpu_cfg = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, cfg),
                     "cfg");
-    cpu_eba = tcg_global_mem_new(TCG_AREG0,
+    cpu_eba = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, eba),
                     "eba");
-    cpu_dc = tcg_global_mem_new(TCG_AREG0,
+    cpu_dc = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, dc),
                     "dc");
-    cpu_deba = tcg_global_mem_new(TCG_AREG0,
+    cpu_deba = tcg_global_mem_new(cpu_env,
                     offsetof(CPULM32State, deba),
                     "deba");
 }

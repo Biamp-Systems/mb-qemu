@@ -9,11 +9,13 @@
  * directory.
  */
 
+#include "qemu/osdep.h"
 #include "hw/boards.h"
 #include "qmp-commands.h"
 #include "migration/qemu-file.h"
 #include "hw/s390x/storage-keys.h"
 #include "qemu/error-report.h"
+#include "sysemu/kvm.h"
 
 #define S390_SKEYS_BUFFER_SIZE 131072  /* Room for 128k storage keys */
 #define S390_SKEYS_SAVE_FLAG_EOS 0x01
@@ -237,7 +239,7 @@ static const TypeInfo qemu_s390_skeys_info = {
     .instance_init = qemu_s390_skeys_init,
     .instance_size = sizeof(QEMUS390SKeysState),
     .class_init    = qemu_s390_skeys_class_init,
-    .instance_size = sizeof(S390SKeysClass),
+    .class_size    = sizeof(S390SKeysClass),
 };
 
 static void s390_storage_keys_save(QEMUFile *f, void *opaque)

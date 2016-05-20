@@ -19,6 +19,7 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/hw.h"
 #include "net/net.h"
@@ -27,12 +28,14 @@
 #include "hw/devices.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
+#include "target-microblaze/cpu.h"
 #include "hw/loader.h"
 #include "elf.h"
 #include "sysemu/blockdev.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
+#include "qapi/error.h"
 
 #include "hw/fdt/fdt_generic.h"
 #include "hw/fdt/fdt_generic_devices.h"
@@ -137,10 +140,10 @@ static ram_addr_t get_dram_base(void *fdt)
     Error *errp = NULL;
      
     printf("DRAM base %08X, size %08X\n",
-        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp),
-        qemu_fdt_getprop_cell(fdt, "/memory", "reg", 1, 0, &errp));
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 0, 0, &errp),
+        qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 1, 0, &errp));
      
-    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", 0, 0, &errp);
+    return qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 0, 0, &errp);
 }
 
 /*
@@ -192,12 +195,12 @@ static void labx_microblaze_init(MachineState *machine)
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
                                &entry, &low, &high,
-                               1, EM_MICROBLAZE, 0);
+                               1, EM_MICROBLAZE, 0, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
             kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
                                    NULL, &entry, NULL, NULL,
-                                   1, EM_MICROBLAZE, 0);
+                                   1, EM_MICROBLAZE, 0, 0);
         }
         /* Always boot into physical ram.  */
         boot_info.bootstrap_pc = ddr_base + (entry & 0x07ffffff);

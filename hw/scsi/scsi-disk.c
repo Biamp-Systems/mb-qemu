@@ -28,7 +28,8 @@ do { printf("scsi-disk: " fmt , ## __VA_ARGS__); } while (0)
 #define DPRINTF(fmt, ...) do {} while(0)
 #endif
 
-#include "qemu-common.h"
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "hw/scsi/scsi.h"
 #include "block/scsi.h"
@@ -37,6 +38,7 @@ do { printf("scsi-disk: " fmt , ## __VA_ARGS__); } while (0)
 #include "sysemu/blockdev.h"
 #include "hw/block/block.h"
 #include "sysemu/dma.h"
+#include "qemu/cutils.h"
 
 #ifdef __linux
 #include <scsi/sg.h>
@@ -76,8 +78,6 @@ struct SCSIDiskState
     bool media_changed;
     bool media_event;
     bool eject_request;
-    uint64_t wwn;
-    uint64_t port_wwn;
     uint16_t port_index;
     uint64_t max_unmap_size;
     uint64_t max_io_size;
@@ -108,7 +108,7 @@ static void scsi_check_condition(SCSIDiskReq *r, SCSISense sense)
     scsi_req_complete(&r->req, CHECK_CONDITION);
 }
 
-static uint32_t scsi_init_iovec(SCSIDiskReq *r, size_t size)
+static void scsi_init_iovec(SCSIDiskReq *r, size_t size)
 {
     SCSIDiskState *s = DO_UPCAST(SCSIDiskState, qdev, r->req.dev);
 
@@ -118,7 +118,6 @@ static uint32_t scsi_init_iovec(SCSIDiskReq *r, size_t size)
     }
     r->iov.iov_len = MIN(r->sector_count * 512, r->buflen);
     qemu_iovec_init_external(&r->qiov, &r->iov, 1);
-    return r->qiov.size / 512;
 }
 
 static void scsi_disk_save_request(QEMUFile *f, SCSIRequest *req)
@@ -316,7 +315,6 @@ done:
 static void scsi_do_read(SCSIDiskReq *r, int ret)
 {
     SCSIDiskState *s = DO_UPCAST(SCSIDiskState, qdev, r->req.dev);
-    uint32_t n;
 
     assert (r->req.aiocb == NULL);
 
@@ -340,11 +338,12 @@ static void scsi_do_read(SCSIDiskReq *r, int ret)
         r->req.aiocb = dma_blk_read(s->qdev.conf.blk, r->req.sg, r->sector,
                                     scsi_dma_complete, r);
     } else {
-        n = scsi_init_iovec(r, SCSI_DMA_BUF_SIZE);
+        scsi_init_iovec(r, SCSI_DMA_BUF_SIZE);
         block_acct_start(blk_get_stats(s->qdev.conf.blk), &r->acct,
-                         n * BDRV_SECTOR_SIZE, BLOCK_ACCT_READ);
-        r->req.aiocb = blk_aio_readv(s->qdev.conf.blk, r->sector, &r->qiov, n,
-                                     scsi_read_complete, r);
+                         r->qiov.size, BLOCK_ACCT_READ);
+        r->req.aiocb = blk_aio_preadv(s->qdev.conf.blk,
+                                      r->sector << BDRV_SECTOR_BITS, &r->qiov,
+                                      0, scsi_read_complete, r);
     }
 
 done:
@@ -504,7 +503,6 @@ static void scsi_write_data(SCSIRequest *req)
 {
     SCSIDiskReq *r = DO_UPCAST(SCSIDiskReq, req, req);
     SCSIDiskState *s = DO_UPCAST(SCSIDiskState, qdev, r->req.dev);
-    uint32_t n;
 
     /* No data transfer may already be in progress */
     assert(r->req.aiocb == NULL);
@@ -544,11 +542,11 @@ static void scsi_write_data(SCSIRequest *req)
         r->req.aiocb = dma_blk_write(s->qdev.conf.blk, r->req.sg, r->sector,
                                      scsi_dma_complete, r);
     } else {
-        n = r->qiov.size / 512;
         block_acct_start(blk_get_stats(s->qdev.conf.blk), &r->acct,
-                         n * BDRV_SECTOR_SIZE, BLOCK_ACCT_WRITE);
-        r->req.aiocb = blk_aio_writev(s->qdev.conf.blk, r->sector, &r->qiov, n,
-                                      scsi_write_complete, r);
+                         r->qiov.size, BLOCK_ACCT_WRITE);
+        r->req.aiocb = blk_aio_pwritev(s->qdev.conf.blk,
+                                       r->sector << BDRV_SECTOR_BITS, &r->qiov,
+                                       0, scsi_write_complete, r);
     }
 }
 
@@ -632,21 +630,21 @@ static int scsi_disk_emulate_inquiry(SCSIRequest *req, uint8_t *outbuf)
             memcpy(outbuf+buflen, str, id_len);
             buflen += id_len;
 
-            if (s->wwn) {
+            if (s->qdev.wwn) {
                 outbuf[buflen++] = 0x1; // Binary
                 outbuf[buflen++] = 0x3; // NAA
                 outbuf[buflen++] = 0;   // reserved
                 outbuf[buflen++] = 8;
-                stq_be_p(&outbuf[buflen], s->wwn);
+                stq_be_p(&outbuf[buflen], s->qdev.wwn);
                 buflen += 8;
             }
 
-            if (s->port_wwn) {
+            if (s->qdev.port_wwn) {
                 outbuf[buflen++] = 0x61; // SAS / Binary
                 outbuf[buflen++] = 0x93; // PIV / Target port / NAA
                 outbuf[buflen++] = 0;    // reserved
                 outbuf[buflen++] = 8;
-                stq_be_p(&outbuf[buflen], s->port_wwn);
+                stq_be_p(&outbuf[buflen], s->qdev.port_wwn);
                 buflen += 8;
             }
 
@@ -1730,13 +1728,13 @@ static void scsi_write_same_complete(void *opaque, int ret)
     if (data->iov.iov_len) {
         block_acct_start(blk_get_stats(s->qdev.conf.blk), &r->acct,
                          data->iov.iov_len, BLOCK_ACCT_WRITE);
-        /* blk_aio_write doesn't like the qiov size being different from
-         * nb_sectors, make sure they match.
-         */
+        /* Reinitialize qiov, to handle unaligned WRITE SAME request
+         * where final qiov may need smaller size */
         qemu_iovec_init_external(&data->qiov, &data->iov, 1);
-        r->req.aiocb = blk_aio_writev(s->qdev.conf.blk, data->sector,
-                                      &data->qiov, data->iov.iov_len / 512,
-                                      scsi_write_same_complete, data);
+        r->req.aiocb = blk_aio_pwritev(s->qdev.conf.blk,
+                                       data->sector << BDRV_SECTOR_BITS,
+                                       &data->qiov, 0,
+                                       scsi_write_same_complete, data);
         return;
     }
 
@@ -1781,8 +1779,8 @@ static void scsi_disk_emulate_write_same(SCSIDiskReq *r, uint8_t *inbuf)
                          nb_sectors * s->qdev.blocksize,
                         BLOCK_ACCT_WRITE);
         r->req.aiocb = blk_aio_write_zeroes(s->qdev.conf.blk,
-                                r->req.cmd.lba * (s->qdev.blocksize / 512),
-                                nb_sectors * (s->qdev.blocksize / 512),
+                                r->req.cmd.lba * s->qdev.blocksize,
+                                nb_sectors * s->qdev.blocksize,
                                 flags, scsi_aio_complete, r);
         return;
     }
@@ -1803,9 +1801,10 @@ static void scsi_disk_emulate_write_same(SCSIDiskReq *r, uint8_t *inbuf)
     scsi_req_ref(&r->req);
     block_acct_start(blk_get_stats(s->qdev.conf.blk), &r->acct,
                      data->iov.iov_len, BLOCK_ACCT_WRITE);
-    r->req.aiocb = blk_aio_writev(s->qdev.conf.blk, data->sector,
-                                  &data->qiov, data->iov.iov_len / 512,
-                                  scsi_write_same_complete, data);
+    r->req.aiocb = blk_aio_pwritev(s->qdev.conf.blk,
+                                   data->sector << BDRV_SECTOR_BITS,
+                                   &data->qiov, 0,
+                                   scsi_write_same_complete, data);
 }
 
 static void scsi_disk_emulate_write_data(SCSIRequest *req)
@@ -2574,6 +2573,7 @@ static void scsi_block_realize(SCSIDevice *dev, Error **errp)
     s->features |= (1 << SCSI_DISK_F_NO_REMOVABLE_DEVOPS);
 
     scsi_realize(&s->qdev, errp);
+    scsi_generic_read_device_identification(&s->qdev);
 }
 
 static bool scsi_block_is_passthrough(SCSIDiskState *s, uint8_t *buf)
@@ -2667,8 +2667,8 @@ static Property scsi_hd_properties[] = {
                     SCSI_DISK_F_REMOVABLE, false),
     DEFINE_PROP_BIT("dpofua", SCSIDiskState, features,
                     SCSI_DISK_F_DPOFUA, false),
-    DEFINE_PROP_UINT64("wwn", SCSIDiskState, wwn, 0),
-    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, port_wwn, 0),
+    DEFINE_PROP_UINT64("wwn", SCSIDiskState, qdev.wwn, 0),
+    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, qdev.port_wwn, 0),
     DEFINE_PROP_UINT16("port_index", SCSIDiskState, port_index, 0),
     DEFINE_PROP_UINT64("max_unmap_size", SCSIDiskState, max_unmap_size,
                        DEFAULT_MAX_UNMAP_SIZE),
@@ -2717,8 +2717,8 @@ static const TypeInfo scsi_hd_info = {
 
 static Property scsi_cd_properties[] = {
     DEFINE_SCSI_DISK_PROPERTIES(),
-    DEFINE_PROP_UINT64("wwn", SCSIDiskState, wwn, 0),
-    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, port_wwn, 0),
+    DEFINE_PROP_UINT64("wwn", SCSIDiskState, qdev.wwn, 0),
+    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, qdev.port_wwn, 0),
     DEFINE_PROP_UINT16("port_index", SCSIDiskState, port_index, 0),
     DEFINE_PROP_UINT64("max_io_size", SCSIDiskState, max_io_size,
                        DEFAULT_MAX_IO_SIZE),
@@ -2782,8 +2782,8 @@ static Property scsi_disk_properties[] = {
                     SCSI_DISK_F_REMOVABLE, false),
     DEFINE_PROP_BIT("dpofua", SCSIDiskState, features,
                     SCSI_DISK_F_DPOFUA, false),
-    DEFINE_PROP_UINT64("wwn", SCSIDiskState, wwn, 0),
-    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, port_wwn, 0),
+    DEFINE_PROP_UINT64("wwn", SCSIDiskState, qdev.wwn, 0),
+    DEFINE_PROP_UINT64("port_wwn", SCSIDiskState, qdev.port_wwn, 0),
     DEFINE_PROP_UINT16("port_index", SCSIDiskState, port_index, 0),
     DEFINE_PROP_UINT64("max_unmap_size", SCSIDiskState, max_unmap_size,
                        DEFAULT_MAX_UNMAP_SIZE),

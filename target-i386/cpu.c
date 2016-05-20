@@ -16,12 +16,11 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <inttypes.h>
+#include "qemu/osdep.h"
+#include "qemu/cutils.h"
 
 #include "cpu.h"
+#include "exec/exec-all.h"
 #include "sysemu/kvm.h"
 #include "sysemu/cpus.h"
 #include "kvm_i386.h"
@@ -36,7 +35,6 @@
 #include "qapi/visitor.h"
 #include "sysemu/arch_init.h"
 
-#include "hw/hw.h"
 #if defined(CONFIG_KVM)
 #include <linux/kvm_para.h>
 #endif
@@ -45,6 +43,7 @@
 #include "hw/qdev-properties.h"
 #ifndef CONFIG_USER_ONLY
 #include "exec/address-spaces.h"
+#include "hw/hw.h"
 #include "hw/xen/xen.h"
 #include "hw/i386/apic_internal.h"
 #endif
@@ -263,6 +262,17 @@ static const char *cpuid_7_0_ebx_feature_name[] = {
     "clwb", NULL, "avx512pf", "avx512er", "avx512cd", NULL, NULL, NULL,
 };
 
+static const char *cpuid_7_0_ecx_feature_name[] = {
+    NULL, NULL, NULL, "pku",
+    "ospke", NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL,
+};
+
 static const char *cpuid_apm_edx_feature_name[] = {
     NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL,
@@ -320,14 +330,14 @@ static const char *cpuid_6_feature_name[] = {
 #define TCG_EXT_FEATURES (CPUID_EXT_SSE3 | CPUID_EXT_PCLMULQDQ | \
           CPUID_EXT_MONITOR | CPUID_EXT_SSSE3 | CPUID_EXT_CX16 | \
           CPUID_EXT_SSE41 | CPUID_EXT_SSE42 | CPUID_EXT_POPCNT | \
+          CPUID_EXT_XSAVE | /* CPUID_EXT_OSXSAVE is dynamic */   \
           CPUID_EXT_MOVBE | CPUID_EXT_AES | CPUID_EXT_HYPERVISOR)
           /* missing:
           CPUID_EXT_DTES64, CPUID_EXT_DSCPL, CPUID_EXT_VMX, CPUID_EXT_SMX,
           CPUID_EXT_EST, CPUID_EXT_TM2, CPUID_EXT_CID, CPUID_EXT_FMA,
           CPUID_EXT_XTPR, CPUID_EXT_PDCM, CPUID_EXT_PCID, CPUID_EXT_DCA,
-          CPUID_EXT_X2APIC, CPUID_EXT_TSC_DEADLINE_TIMER, CPUID_EXT_XSAVE,
-          CPUID_EXT_OSXSAVE, CPUID_EXT_AVX, CPUID_EXT_F16C,
-          CPUID_EXT_RDRAND */
+          CPUID_EXT_X2APIC, CPUID_EXT_TSC_DEADLINE_TIMER, CPUID_EXT_AVX,
+          CPUID_EXT_F16C, CPUID_EXT_RDRAND */
 
 #ifdef TARGET_X86_64
 #define TCG_EXT2_X86_64_FEATURES (CPUID_EXT2_SYSCALL | CPUID_EXT2_LM)
@@ -347,14 +357,17 @@ static const char *cpuid_6_feature_name[] = {
 #define TCG_7_0_EBX_FEATURES (CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_SMAP | \
           CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ADX | \
           CPUID_7_0_EBX_PCOMMIT | CPUID_7_0_EBX_CLFLUSHOPT |            \
-          CPUID_7_0_EBX_CLWB)
+          CPUID_7_0_EBX_CLWB | CPUID_7_0_EBX_MPX | CPUID_7_0_EBX_FSGSBASE)
           /* missing:
-          CPUID_7_0_EBX_FSGSBASE, CPUID_7_0_EBX_HLE, CPUID_7_0_EBX_AVX2,
+          CPUID_7_0_EBX_HLE, CPUID_7_0_EBX_AVX2,
           CPUID_7_0_EBX_ERMS, CPUID_7_0_EBX_INVPCID, CPUID_7_0_EBX_RTM,
           CPUID_7_0_EBX_RDSEED */
+#define TCG_7_0_ECX_FEATURES (CPUID_7_0_ECX_PKU | CPUID_7_0_ECX_OSPKE)
 #define TCG_APM_FEATURES 0
 #define TCG_6_EAX_FEATURES CPUID_6_EAX_ARAT
-
+#define TCG_XSAVE_FEATURES (CPUID_XSAVE_XSAVEOPT | CPUID_XSAVE_XGETBV1)
+          /* missing:
+          CPUID_XSAVE_XSAVEC, CPUID_XSAVE_XSAVES */
 
 typedef struct FeatureWordInfo {
     const char **feat_names;
@@ -409,6 +422,13 @@ static FeatureWordInfo feature_word_info[FEATURE_WORDS] = {
         .cpuid_reg = R_EBX,
         .tcg_features = TCG_7_0_EBX_FEATURES,
     },
+    [FEAT_7_0_ECX] = {
+        .feat_names = cpuid_7_0_ecx_feature_name,
+        .cpuid_eax = 7,
+        .cpuid_needs_ecx = true, .cpuid_ecx = 0,
+        .cpuid_reg = R_ECX,
+        .tcg_features = TCG_7_0_ECX_FEATURES,
+    },
     [FEAT_8000_0007_EDX] = {
         .feat_names = cpuid_apm_edx_feature_name,
         .cpuid_eax = 0x80000007,
@@ -421,7 +441,7 @@ static FeatureWordInfo feature_word_info[FEATURE_WORDS] = {
         .cpuid_eax = 0xd,
         .cpuid_needs_ecx = true, .cpuid_ecx = 1,
         .cpuid_reg = R_EAX,
-        .tcg_features = 0,
+        .tcg_features = TCG_XSAVE_FEATURES,
     },
     [FEAT_6_EAX] = {
         .feat_names = cpuid_6_feature_name,
@@ -451,24 +471,28 @@ static const X86RegisterInfo32 x86_reg_info_32[CPU_NB_REGS32] = {
 };
 #undef REGISTER
 
-typedef struct ExtSaveArea {
-    uint32_t feature, bits;
-    uint32_t offset, size;
-} ExtSaveArea;
-
-static const ExtSaveArea ext_save_areas[] = {
-    [2] = { .feature = FEAT_1_ECX, .bits = CPUID_EXT_AVX,
+const ExtSaveArea x86_ext_save_areas[] = {
+    [XSTATE_YMM_BIT] =
+          { .feature = FEAT_1_ECX, .bits = CPUID_EXT_AVX,
             .offset = 0x240, .size = 0x100 },
-    [3] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
+    [XSTATE_BNDREGS_BIT] =
+          { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
             .offset = 0x3c0, .size = 0x40  },
-    [4] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
+    [XSTATE_BNDCSR_BIT] =
+          { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_MPX,
             .offset = 0x400, .size = 0x40  },
-    [5] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
+    [XSTATE_OPMASK_BIT] =
+          { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
             .offset = 0x440, .size = 0x40 },
-    [6] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
+    [XSTATE_ZMM_Hi256_BIT] =
+          { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
             .offset = 0x480, .size = 0x200 },
-    [7] = { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
+    [XSTATE_Hi16_ZMM_BIT] =
+          { .feature = FEAT_7_0_EBX, .bits = CPUID_7_0_EBX_AVX512F,
             .offset = 0x680, .size = 0x400 },
+    [XSTATE_PKRU_BIT] =
+          { .feature = FEAT_7_0_ECX, .bits = CPUID_7_0_ECX_PKU,
+            .offset = 0xA80, .size = 0x8 },
 };
 
 const char *get_register_name_32(unsigned int reg)
@@ -1509,8 +1533,9 @@ static void report_unavailable_features(FeatureWord w, uint32_t mask)
     }
 }
 
-static void x86_cpuid_version_get_family(Object *obj, Visitor *v, void *opaque,
-                                         const char *name, Error **errp)
+static void x86_cpuid_version_get_family(Object *obj, Visitor *v,
+                                         const char *name, void *opaque,
+                                         Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     CPUX86State *env = &cpu->env;
@@ -1520,11 +1545,12 @@ static void x86_cpuid_version_get_family(Object *obj, Visitor *v, void *opaque,
     if (value == 0xf) {
         value += (env->cpuid_version >> 20) & 0xff;
     }
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
-static void x86_cpuid_version_set_family(Object *obj, Visitor *v, void *opaque,
-                                         const char *name, Error **errp)
+static void x86_cpuid_version_set_family(Object *obj, Visitor *v,
+                                         const char *name, void *opaque,
+                                         Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     CPUX86State *env = &cpu->env;
@@ -1533,7 +1559,7 @@ static void x86_cpuid_version_set_family(Object *obj, Visitor *v, void *opaque,
     Error *local_err = NULL;
     int64_t value;
 
-    visit_type_int(v, &value, name, &local_err);
+    visit_type_int(v, name, &value, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -1552,8 +1578,9 @@ static void x86_cpuid_version_set_family(Object *obj, Visitor *v, void *opaque,
     }
 }
 
-static void x86_cpuid_version_get_model(Object *obj, Visitor *v, void *opaque,
-                                        const char *name, Error **errp)
+static void x86_cpuid_version_get_model(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     CPUX86State *env = &cpu->env;
@@ -1561,11 +1588,12 @@ static void x86_cpuid_version_get_model(Object *obj, Visitor *v, void *opaque,
 
     value = (env->cpuid_version >> 4) & 0xf;
     value |= ((env->cpuid_version >> 16) & 0xf) << 4;
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
-static void x86_cpuid_version_set_model(Object *obj, Visitor *v, void *opaque,
-                                        const char *name, Error **errp)
+static void x86_cpuid_version_set_model(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     CPUX86State *env = &cpu->env;
@@ -1574,7 +1602,7 @@ static void x86_cpuid_version_set_model(Object *obj, Visitor *v, void *opaque,
     Error *local_err = NULL;
     int64_t value;
 
-    visit_type_int(v, &value, name, &local_err);
+    visit_type_int(v, name, &value, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -1590,7 +1618,7 @@ static void x86_cpuid_version_set_model(Object *obj, Visitor *v, void *opaque,
 }
 
 static void x86_cpuid_version_get_stepping(Object *obj, Visitor *v,
-                                           void *opaque, const char *name,
+                                           const char *name, void *opaque,
                                            Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
@@ -1598,11 +1626,11 @@ static void x86_cpuid_version_get_stepping(Object *obj, Visitor *v,
     int64_t value;
 
     value = env->cpuid_version & 0xf;
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
 static void x86_cpuid_version_set_stepping(Object *obj, Visitor *v,
-                                           void *opaque, const char *name,
+                                           const char *name, void *opaque,
                                            Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
@@ -1612,7 +1640,7 @@ static void x86_cpuid_version_set_stepping(Object *obj, Visitor *v,
     Error *local_err = NULL;
     int64_t value;
 
-    visit_type_int(v, &value, name, &local_err);
+    visit_type_int(v, name, &value, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -1698,18 +1726,18 @@ static void x86_cpuid_set_model_id(Object *obj, const char *model_id,
     }
 }
 
-static void x86_cpuid_get_tsc_freq(Object *obj, Visitor *v, void *opaque,
-                                   const char *name, Error **errp)
+static void x86_cpuid_get_tsc_freq(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     int64_t value;
 
     value = cpu->env.tsc_khz * 1000;
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
-static void x86_cpuid_set_tsc_freq(Object *obj, Visitor *v, void *opaque,
-                                   const char *name, Error **errp)
+static void x86_cpuid_set_tsc_freq(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     const int64_t min = 0;
@@ -1717,7 +1745,7 @@ static void x86_cpuid_set_tsc_freq(Object *obj, Visitor *v, void *opaque,
     Error *local_err = NULL;
     int64_t value;
 
-    visit_type_int(v, &value, name, &local_err);
+    visit_type_int(v, name, &value, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -1728,20 +1756,20 @@ static void x86_cpuid_set_tsc_freq(Object *obj, Visitor *v, void *opaque,
         return;
     }
 
-    cpu->env.tsc_khz = value / 1000;
+    cpu->env.tsc_khz = cpu->env.user_tsc_khz = value / 1000;
 }
 
-static void x86_cpuid_get_apic_id(Object *obj, Visitor *v, void *opaque,
-                                  const char *name, Error **errp)
+static void x86_cpuid_get_apic_id(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     int64_t value = cpu->apic_id;
 
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
-static void x86_cpuid_set_apic_id(Object *obj, Visitor *v, void *opaque,
-                                  const char *name, Error **errp)
+static void x86_cpuid_set_apic_id(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     DeviceState *dev = DEVICE(obj);
@@ -1756,7 +1784,7 @@ static void x86_cpuid_set_apic_id(Object *obj, Visitor *v, void *opaque,
         return;
     }
 
-    visit_type_int(v, &value, name, &error);
+    visit_type_int(v, name, &value, &error);
     if (error) {
         error_propagate(errp, error);
         return;
@@ -1776,8 +1804,9 @@ static void x86_cpuid_set_apic_id(Object *obj, Visitor *v, void *opaque,
 }
 
 /* Generic getter for "feature-words" and "filtered-features" properties */
-static void x86_cpu_get_feature_words(Object *obj, Visitor *v, void *opaque,
-                                      const char *name, Error **errp)
+static void x86_cpu_get_feature_words(Object *obj, Visitor *v,
+                                      const char *name, void *opaque,
+                                      Error **errp)
 {
     uint32_t *array = (uint32_t *)opaque;
     FeatureWord w;
@@ -1801,21 +1830,21 @@ static void x86_cpu_get_feature_words(Object *obj, Visitor *v, void *opaque,
         list = &list_entries[w];
     }
 
-    visit_type_X86CPUFeatureWordInfoList(v, &list, "feature-words", &err);
+    visit_type_X86CPUFeatureWordInfoList(v, "feature-words", &list, &err);
     error_propagate(errp, err);
 }
 
-static void x86_get_hv_spinlocks(Object *obj, Visitor *v, void *opaque,
-                                 const char *name, Error **errp)
+static void x86_get_hv_spinlocks(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
 {
     X86CPU *cpu = X86_CPU(obj);
     int64_t value = cpu->hyperv_spinlock_attempts;
 
-    visit_type_int(v, &value, name, errp);
+    visit_type_int(v, name, &value, errp);
 }
 
-static void x86_set_hv_spinlocks(Object *obj, Visitor *v, void *opaque,
-                                 const char *name, Error **errp)
+static void x86_set_hv_spinlocks(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
 {
     const int64_t min = 0xFFF;
     const int64_t max = UINT_MAX;
@@ -1823,7 +1852,7 @@ static void x86_set_hv_spinlocks(Object *obj, Visitor *v, void *opaque,
     Error *err = NULL;
     int64_t value;
 
-    visit_type_int(v, &value, name, &err);
+    visit_type_int(v, name, &value, &err);
     if (err) {
         error_propagate(errp, err);
         return;
@@ -2105,6 +2134,10 @@ static void x86_cpu_load_def(X86CPU *cpu, X86CPUDefinition *def, Error **errp)
 
     /* Special cases not set in the X86CPUDefinition structs: */
     if (kvm_enabled()) {
+        if (!kvm_irqchip_in_kernel()) {
+            x86_cpu_change_kvm_default("x2apic", "off");
+        }
+
         x86_cpu_apply_props(cpu, kvm_default_props);
     }
 
@@ -2297,10 +2330,13 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
         *ebx = (cpu->apic_id << 24) |
                8 << 8; /* CLFLUSH size in quad words, Linux wants it. */
         *ecx = env->features[FEAT_1_ECX];
+        if ((*ecx & CPUID_EXT_XSAVE) && (env->cr[4] & CR4_OSXSAVE_MASK)) {
+            *ecx |= CPUID_EXT_OSXSAVE;
+        }
         *edx = env->features[FEAT_1_EDX];
         if (cs->nr_cores * cs->nr_threads > 1) {
             *ebx |= (cs->nr_cores * cs->nr_threads) << 16;
-            *edx |= 1 << 28;    /* HTT bit */
+            *edx |= CPUID_HT;
         }
         break;
     case 2:
@@ -2390,7 +2426,10 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
         if (count == 0) {
             *eax = 0; /* Maximum ECX value for sub-leaves */
             *ebx = env->features[FEAT_7_0_EBX]; /* Feature flags */
-            *ecx = 0; /* Reserved */
+            *ecx = env->features[FEAT_7_0_ECX]; /* Feature flags */
+            if ((*ecx & CPUID_7_0_ECX_PKU) && env->cr[4] & CR4_PKE_MASK) {
+                *ecx |= CPUID_7_0_ECX_OSPKE;
+            }
             *edx = 0; /* Reserved */
         } else {
             *eax = 0;
@@ -2424,7 +2463,7 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
         break;
     case 0xD: {
         KVMState *s = cs->kvm_state;
-        uint64_t kvm_mask;
+        uint64_t ena_mask;
         int i;
 
         /* Processor Extended State */
@@ -2432,35 +2471,39 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
         *ebx = 0;
         *ecx = 0;
         *edx = 0;
-        if (!(env->features[FEAT_1_ECX] & CPUID_EXT_XSAVE) || !kvm_enabled()) {
+        if (!(env->features[FEAT_1_ECX] & CPUID_EXT_XSAVE)) {
             break;
         }
-        kvm_mask =
-            kvm_arch_get_supported_cpuid(s, 0xd, 0, R_EAX) |
-            ((uint64_t)kvm_arch_get_supported_cpuid(s, 0xd, 0, R_EDX) << 32);
+        if (kvm_enabled()) {
+            ena_mask = kvm_arch_get_supported_cpuid(s, 0xd, 0, R_EDX);
+            ena_mask <<= 32;
+            ena_mask |= kvm_arch_get_supported_cpuid(s, 0xd, 0, R_EAX);
+        } else {
+            ena_mask = -1;
+        }
 
         if (count == 0) {
             *ecx = 0x240;
-            for (i = 2; i < ARRAY_SIZE(ext_save_areas); i++) {
-                const ExtSaveArea *esa = &ext_save_areas[i];
-                if ((env->features[esa->feature] & esa->bits) == esa->bits &&
-                    (kvm_mask & (1 << i)) != 0) {
+            for (i = 2; i < ARRAY_SIZE(x86_ext_save_areas); i++) {
+                const ExtSaveArea *esa = &x86_ext_save_areas[i];
+                if ((env->features[esa->feature] & esa->bits) == esa->bits
+                    && ((ena_mask >> i) & 1) != 0) {
                     if (i < 32) {
-                        *eax |= 1 << i;
+                        *eax |= 1u << i;
                     } else {
-                        *edx |= 1 << (i - 32);
+                        *edx |= 1u << (i - 32);
                     }
                     *ecx = MAX(*ecx, esa->offset + esa->size);
                 }
             }
-            *eax |= kvm_mask & (XSTATE_FP | XSTATE_SSE);
+            *eax |= ena_mask & (XSTATE_FP_MASK | XSTATE_SSE_MASK);
             *ebx = *ecx;
         } else if (count == 1) {
             *eax = env->features[FEAT_XSAVE];
-        } else if (count < ARRAY_SIZE(ext_save_areas)) {
-            const ExtSaveArea *esa = &ext_save_areas[count];
-            if ((env->features[esa->feature] & esa->bits) == esa->bits &&
-                (kvm_mask & (1 << count)) != 0) {
+        } else if (count < ARRAY_SIZE(x86_ext_save_areas)) {
+            const ExtSaveArea *esa = &x86_ext_save_areas[count];
+            if ((env->features[esa->feature] & esa->bits) == esa->bits
+                && ((ena_mask >> count) & 1) != 0) {
                 *eax = esa->size;
                 *ebx = esa->offset;
             }
@@ -2481,7 +2524,7 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
 
         /* The Linux kernel checks for the CMPLegacy bit and
          * discards multiple thread information if it is set.
-         * So dont set it here for Intel to make Linux guests happy.
+         * So don't set it here for Intel to make Linux guests happy.
          */
         if (cs->nr_cores * cs->nr_threads > 1) {
             if (env->cpuid_vendor1 != CPUID_VENDOR_INTEL_1 ||
@@ -2613,6 +2656,8 @@ static void x86_cpu_reset(CPUState *s)
     X86CPU *cpu = X86_CPU(s);
     X86CPUClass *xcc = X86_CPU_GET_CLASS(cpu);
     CPUX86State *env = &cpu->env;
+    target_ulong cr4;
+    uint64_t xcr0;
     int i;
 
     xcc->parent_reset(s);
@@ -2672,7 +2717,8 @@ static void x86_cpu_reset(CPUState *s)
     cpu_set_fpuc(env, 0x37f);
 
     env->mxcsr = 0x1f80;
-    env->xstate_bv = XSTATE_FP | XSTATE_SSE;
+    /* All units are in INIT state.  */
+    env->xstate_bv = 0;
 
     env->pat = 0x0007040600070406ULL;
     env->msr_ia32_misc_enable = MSR_IA32_MISC_ENABLE_DEFAULT;
@@ -2683,7 +2729,31 @@ static void x86_cpu_reset(CPUState *s)
     cpu_breakpoint_remove_all(s, BP_CPU);
     cpu_watchpoint_remove_all(s, BP_CPU);
 
-    env->xcr0 = 1;
+    cr4 = 0;
+    xcr0 = XSTATE_FP_MASK;
+
+#ifdef CONFIG_USER_ONLY
+    /* Enable all the features for user-mode.  */
+    if (env->features[FEAT_1_EDX] & CPUID_SSE) {
+        xcr0 |= XSTATE_SSE_MASK;
+    }
+    for (i = 2; i < ARRAY_SIZE(x86_ext_save_areas); i++) {
+        const ExtSaveArea *esa = &x86_ext_save_areas[i];
+        if ((env->features[esa->feature] & esa->bits) == esa->bits) {
+            xcr0 |= 1ull << i;
+        }
+    }
+
+    if (env->features[FEAT_1_ECX] & CPUID_EXT_XSAVE) {
+        cr4 |= CR4_OSFXSR_MASK | CR4_OSXSAVE_MASK;
+    }
+    if (env->features[FEAT_7_0_EBX] & CPUID_7_0_EBX_FSGSBASE) {
+        cr4 |= CR4_FSGSBASE_MASK;
+    }
+#endif
+
+    env->xcr0 = xcr0;
+    cpu_x86_update_cr4(env, cr4);
 
     /*
      * SDM 11.11.5 requires:
@@ -2828,6 +2898,14 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
         env->cpuid_level = 7;
     }
 
+    if (x86_cpu_filter_features(cpu) && cpu->enforce_cpuid) {
+        error_setg(&local_err,
+                   kvm_enabled() ?
+                       "Host doesn't support requested features" :
+                       "TCG doesn't support requested features");
+        goto out;
+    }
+
     /* On AMD CPUs, some CPUID[8000_0001].EDX bits must match the bits on
      * CPUID[1].EDX.
      */
@@ -2837,14 +2915,6 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
            & CPUID_EXT2_AMD_ALIASES);
     }
 
-
-    if (x86_cpu_filter_features(cpu) && cpu->enforce_cpuid) {
-        error_setg(&local_err,
-                   kvm_enabled() ?
-                       "Host doesn't support requested features" :
-                       "TCG doesn't support requested features");
-        goto out;
-    }
 
 #ifndef CONFIG_USER_ONLY
     qemu_register_reset(x86_cpu_machine_reset_cb, cpu);
@@ -2861,9 +2931,10 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
 
 #ifndef CONFIG_USER_ONLY
     if (tcg_enabled()) {
+        AddressSpace *newas = g_new(AddressSpace, 1);
+
         cpu->cpu_as_mem = g_new(MemoryRegion, 1);
         cpu->cpu_as_root = g_new(MemoryRegion, 1);
-        cs->as = g_new(AddressSpace, 1);
 
         /* Outer container... */
         memory_region_init(cpu->cpu_as_root, OBJECT(cpu), "memory", ~0ull);
@@ -2876,7 +2947,9 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
                                  get_system_memory(), 0, ~0ull);
         memory_region_add_subregion_overlap(cpu->cpu_as_root, 0, cpu->cpu_as_mem, 0);
         memory_region_set_enabled(cpu->cpu_as_mem, true);
-        address_space_init(cs->as, cpu->cpu_as_root, "CPU");
+        address_space_init(newas, cpu->cpu_as_root, "CPU");
+        cs->num_ases = 1;
+        cpu_address_space_init(cs, newas, 0);
 
         /* ... SMRAM with higher priority, linked from /machine/smram.  */
         cpu->machine_done.notify = x86_cpu_machine_done;
@@ -2920,22 +2993,16 @@ typedef struct BitProperty {
     uint32_t mask;
 } BitProperty;
 
-static void x86_cpu_get_bit_prop(Object *obj,
-                                 struct Visitor *v,
-                                 void *opaque,
-                                 const char *name,
-                                 Error **errp)
+static void x86_cpu_get_bit_prop(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
 {
     BitProperty *fp = opaque;
     bool value = (*fp->ptr & fp->mask) == fp->mask;
-    visit_type_bool(v, &value, name, errp);
+    visit_type_bool(v, name, &value, errp);
 }
 
-static void x86_cpu_set_bit_prop(Object *obj,
-                                 struct Visitor *v,
-                                 void *opaque,
-                                 const char *name,
-                                 Error **errp)
+static void x86_cpu_set_bit_prop(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
     BitProperty *fp = opaque;
@@ -2947,7 +3014,7 @@ static void x86_cpu_set_bit_prop(Object *obj,
         return;
     }
 
-    visit_type_bool(v, &value, name, &local_err);
+    visit_type_bool(v, name, &value, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -3088,7 +3155,7 @@ static void x86_cpu_initfn(Object *obj)
     /* init various static tables used in TCG mode */
     if (tcg_enabled() && !inited) {
         inited = 1;
-        optimize_flags_init();
+        tcg_x86_init();
     }
 }
 

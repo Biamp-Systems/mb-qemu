@@ -19,7 +19,9 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "hw/timer/arm_mptimer.h"
+#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "qom/cpu.h"
 

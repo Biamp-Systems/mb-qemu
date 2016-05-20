@@ -14,8 +14,6 @@
 #ifndef QEMU_KVM_H
 #define QEMU_KVM_H
 
-#include <errno.h>
-#include "config-host.h"
 #include "qemu/queue.h"
 #include "qom/cpu.h"
 #include "exec/memattrs.h"
@@ -220,6 +218,7 @@ int kvm_init_vcpu(CPUState *cpu);
 int kvm_cpu_exec(CPUState *cpu);
 
 #ifdef NEED_CPU_H
+#include "cpu.h"
 
 void kvm_setup_guest_memory(void *start, size_t size);
 void kvm_flush_coalesced_mmio_buffer(void);
@@ -308,6 +307,15 @@ void kvm_device_access(int fd, int group, uint64_t attr,
  */
 int kvm_create_device(KVMState *s, uint64_t type, bool test);
 
+/**
+ * kvm_device_supported - probe whether KVM supports specific device
+ *
+ * @vmfd: The fd handler for VM
+ * @type: type of device
+ *
+ * @return: true if supported, otherwise false.
+ */
+bool kvm_device_supported(int vmfd, uint64_t type);
 
 /* Arch specific hooks */
 

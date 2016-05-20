@@ -11,11 +11,12 @@
  *
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qapi/qmp/types.h"
 #include "qapi/qmp/dispatch.h"
 #include "qapi/qmp/json-parser.h"
 #include "qapi-types.h"
-#include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 
 static QDict *qmp_dispatch_check_obj(const QObject *request, Error **errp)
@@ -93,17 +94,13 @@ static QObject *do_qmp_dispatch(QObject *request, Error **errp)
         QINCREF(args);
     }
 
-    switch (cmd->type) {
-    case QCT_NORMAL:
-        cmd->fn(args, &ret, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
-        } else if (cmd->options & QCO_NO_SUCCESS_RESP) {
-            g_assert(!ret);
-        } else if (!ret) {
-            ret = QOBJECT(qdict_new());
-        }
-        break;
+    cmd->fn(args, &ret, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+    } else if (cmd->options & QCO_NO_SUCCESS_RESP) {
+        g_assert(!ret);
+    } else if (!ret) {
+        ret = QOBJECT(qdict_new());
     }
 
     QDECREF(args);

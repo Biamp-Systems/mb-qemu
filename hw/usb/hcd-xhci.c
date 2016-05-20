@@ -18,6 +18,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
@@ -697,11 +698,13 @@ static inline void xhci_dma_write_u32s(XHCIState *xhci, dma_addr_t addr,
                                        uint32_t *buf, size_t len)
 {
     int i;
-    uint32_t tmp[len / sizeof(uint32_t)];
+    uint32_t tmp[5];
+    uint32_t n = len / sizeof(uint32_t);
 
     assert((len % sizeof(uint32_t)) == 0);
+    assert(n <= ARRAY_SIZE(tmp));
 
-    for (i = 0; i < (len / sizeof(uint32_t)); i++) {
+    for (i = 0; i < n; i++) {
         tmp[i] = cpu_to_le32(buf[i]);
     }
     pci_dma_write(PCI_DEVICE(xhci), addr, tmp, len);
@@ -1528,7 +1531,10 @@ static TRBCCode xhci_disable_ep(XHCIState *xhci, unsigned int slotid,
         usb_packet_cleanup(&epctx->transfers[i].packet);
     }
 
-    xhci_set_ep_state(xhci, epctx, NULL, EP_DISABLED);
+    /* only touch guest RAM if we're not resetting the HC */
+    if (xhci->dcbaap_low || xhci->dcbaap_high) {
+        xhci_set_ep_state(xhci, epctx, NULL, EP_DISABLED);
+    }
 
     timer_free(epctx->kick_timer);
     g_free(epctx);

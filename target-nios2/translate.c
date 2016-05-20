@@ -35,6 +35,7 @@
 
 #include "exec/cpu_ldst.h"
 #include "exec/helper-gen.h"
+#include "exec/log.h"
 
 static const char *regnames[] = {
     "zero",     "at",       "r2",       "r3",
@@ -240,7 +241,7 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
 
     for (i = 0; i < NUM_CORE_REGS; i++) {
-        cpu_R[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_R[i] = tcg_global_mem_new(cpu_env,
                                       offsetof(CPUNios2State, regs[i]),
                                       regnames[i]);
     }

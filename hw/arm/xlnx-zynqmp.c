@@ -15,6 +15,10 @@
  * for more details.
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include "hw/arm/xlnx-zynqmp.h"
 #include "hw/intc/arm_gic_common.h"
 #include "exec/address-spaces.h"
@@ -54,6 +58,14 @@ static const uint64_t sdhci_addr[XLNX_ZYNQMP_NUM_SDHCI] = {
 
 static const int sdhci_intr[XLNX_ZYNQMP_NUM_SDHCI] = {
     48, 49,
+};
+
+static const uint64_t spi_addr[XLNX_ZYNQMP_NUM_SPIS] = {
+    0xFF040000, 0xFF050000,
+};
+
+static const int spi_intr[XLNX_ZYNQMP_NUM_SPIS] = {
+    19, 20,
 };
 
 typedef struct XlnxZynqMPGICRegion {
@@ -116,6 +128,12 @@ static void xlnx_zynqmp_init(Object *obj)
                           TYPE_SYSBUS_SDHCI);
         qdev_set_parent_bus(DEVICE(&s->sdhci[i]),
                             sysbus_get_default());
+    }
+
+    for (i = 0; i < XLNX_ZYNQMP_NUM_SPIS; i++) {
+        object_initialize(&s->spi[i], sizeof(s->spi[i]),
+                          TYPE_XILINX_SPIPS);
+        qdev_set_parent_bus(DEVICE(&s->spi[i]), sysbus_get_default());
     }
 }
 
@@ -312,6 +330,8 @@ static void xlnx_zynqmp_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->sata), 0, gic_spi[SATA_INTR]);
 
     for (i = 0; i < XLNX_ZYNQMP_NUM_SDHCI; i++) {
+        char *bus_name;
+
         object_property_set_bool(OBJECT(&s->sdhci[i]), true,
                                  "realized", &err);
         if (err) {
@@ -322,6 +342,29 @@ static void xlnx_zynqmp_realize(DeviceState *dev, Error **errp)
                         sdhci_addr[i]);
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci[i]), 0,
                            gic_spi[sdhci_intr[i]]);
+        /* Alias controller SD bus to the SoC itself */
+        bus_name = g_strdup_printf("sd-bus%d", i);
+        object_property_add_alias(OBJECT(s), bus_name,
+                                  OBJECT(&s->sdhci[i]), "sd-bus",
+                                  &error_abort);
+        g_free(bus_name);
+    }
+
+    for (i = 0; i < XLNX_ZYNQMP_NUM_SPIS; i++) {
+        gchar *bus_name;
+
+        object_property_set_bool(OBJECT(&s->spi[i]), true, "realized", &err);
+
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->spi[i]), 0, spi_addr[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi[i]), 0,
+                           gic_spi[spi_intr[i]]);
+
+        /* Alias controller SPI bus to the SoC itself */
+        bus_name = g_strdup_printf("spi%d", i);
+        object_property_add_alias(OBJECT(s), bus_name,
+                                  OBJECT(&s->spi[i]), "spi0",
+                                  &error_abort);
+	g_free(bus_name);
     }
 }
 

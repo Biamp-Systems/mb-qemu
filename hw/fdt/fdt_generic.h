@@ -6,6 +6,7 @@
 #ifndef FDT_GENERIC_H
 #define FDT_GENERIC_H
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "hw/sysbus.h"
 #include "sysemu/device_tree.h"

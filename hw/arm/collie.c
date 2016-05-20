@@ -8,6 +8,7 @@
  * Contributions after 2012-01-13 are licensed under the terms of the
  * GNU GPL, version 2 or (at your option) any later version.
  */
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/boards.h"
@@ -17,6 +18,7 @@
 #include "hw/block/flash.h"
 #include "sysemu/block-backend.h"
 #include "exec/address-spaces.h"
+#include "qom/cpu.h"
 
 static struct arm_boot_info collie_binfo = {
     .loader_start = SA_SDCS0,

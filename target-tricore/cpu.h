@@ -20,8 +20,8 @@
 #define __TRICORE_CPU_H__
 
 #include "tricore-defs.h"
-#include "config.h"
 #include "qemu-common.h"
+#include "cpu-qom.h"
 #include "exec/cpu-defs.h"
 #include "fpu/softfloat.h"
 
@@ -184,8 +184,7 @@ struct CPUTriCoreState {
     uint32_t M2CNT;
     uint32_t M3CNT;
     /* Floating Point Registers */
-    /* XXX: */
-
+    float_status fp_status;
     /* QEMU */
     int error_code;
     uint32_t hflags;    /* CPU State */
@@ -199,6 +198,34 @@ struct CPUTriCoreState {
     void *irq[8];
     struct QEMUTimer *timer; /* Internal timer */
 };
+
+/**
+ * TriCoreCPU:
+ * @env: #CPUTriCoreState
+ *
+ * A TriCore CPU.
+ */
+struct TriCoreCPU {
+    /*< private >*/
+    CPUState parent_obj;
+    /*< public >*/
+
+    CPUTriCoreState env;
+};
+
+static inline TriCoreCPU *tricore_env_get_cpu(CPUTriCoreState *env)
+{
+    return TRICORE_CPU(container_of(env, TriCoreCPU, env));
+}
+
+#define ENV_GET_CPU(e) CPU(tricore_env_get_cpu(e))
+
+#define ENV_OFFSET offsetof(TriCoreCPU, env)
+
+hwaddr tricore_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+void tricore_cpu_dump_state(CPUState *cpu, FILE *f,
+                            fprintf_function cpu_fprintf, int flags);
+
 
 #define MASK_PCXI_PCPN 0xff000000
 #define MASK_PCXI_PIE  0x00800000
@@ -218,6 +245,7 @@ struct CPUTriCoreState {
 #define MASK_PSW_GW  0x00000100
 #define MASK_PSW_CDE 0x00000080
 #define MASK_PSW_CDC 0x0000007f
+#define MASK_PSW_FPU_RM 0x3000000
 
 #define MASK_SYSCON_PRO_TEN 0x2
 #define MASK_SYSCON_FCD_SF  0x1
@@ -271,6 +299,7 @@ enum {
     TRAPC_ASSERT   = 5,
     TRAPC_SYSCALL  = 6,
     TRAPC_NMI      = 7,
+    TRAPC_IRQ      = 8
 };
 
 /* Class 0 TIN */
@@ -339,7 +368,8 @@ enum {
 uint32_t psw_read(CPUTriCoreState *env);
 void psw_write(CPUTriCoreState *env, uint32_t val);
 
-#include "cpu-qom.h"
+void fpu_set_state(CPUTriCoreState *env);
+
 #define MMU_USER_IDX 2
 
 void tricore_cpu_list(FILE *f, fprintf_function cpu_fprintf);
@@ -375,7 +405,7 @@ void tricore_tcg_init(void);
 int cpu_tricore_signal_handler(int host_signum, void *pinfo, void *puc);
 
 static inline void cpu_get_tb_cpu_state(CPUTriCoreState *env, target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+                                        target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->PC;
     *cs_base = 0;
@@ -391,7 +421,5 @@ TriCoreCPU *cpu_tricore_init(const char *cpu_model);
 int cpu_tricore_handle_mmu_fault(CPUState *cpu, target_ulong address,
                                  int rw, int mmu_idx);
 #define cpu_handle_mmu_fault cpu_tricore_handle_mmu_fault
-
-#include "exec/exec-all.h"
 
 #endif /*__TRICORE_CPU_H__ */

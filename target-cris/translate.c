@@ -23,8 +23,10 @@
  * The condition code translation is in need of attention.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "disas/disas.h"
+#include "exec/exec-all.h"
 #include "tcg-op.h"
 #include "exec/helper-proto.h"
 #include "mmu.h"
@@ -34,6 +36,7 @@
 #include "exec/helper-gen.h"
 
 #include "trace-tcg.h"
+#include "exec/log.h"
 
 
 #define DISAS_CRIS 0
@@ -58,7 +61,7 @@
 #define CC_MASK_NZVC 0xf
 #define CC_MASK_RNZV 0x10e
 
-static TCGv_ptr cpu_env;
+static TCGv_env cpu_env;
 static TCGv cpu_R[16];
 static TCGv cpu_PR[16];
 static TCGv cc_x;
@@ -518,14 +521,22 @@ static void t_gen_cc_jmp(TCGv pc_true, TCGv pc_false)
     gen_set_label(l1);
 }
 
+static inline bool use_goto_tb(DisasContext *dc, target_ulong dest)
+{
+#ifndef CONFIG_USER_ONLY
+    return (dc->tb->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK) ||
+           (dc->ppc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK);
+#else
+    return true;
+#endif
+}
+
 static void gen_goto_tb(DisasContext *dc, int n, target_ulong dest)
 {
-    TranslationBlock *tb;
-    tb = dc->tb;
-    if ((tb->pc & TARGET_PAGE_MASK) == (dest & TARGET_PAGE_MASK)) {
+    if (use_goto_tb(dc, dest)) {
         tcg_gen_goto_tb(n);
         tcg_gen_movi_tl(env_pc, dest);
-                tcg_gen_exit_tb((uintptr_t)tb + n);
+                tcg_gen_exit_tb((uintptr_t)dc->tb + n);
     } else {
         tcg_gen_movi_tl(env_pc, dest);
         tcg_gen_exit_tb(0);
@@ -3047,7 +3058,7 @@ static unsigned int crisv32_decoder(CPUCRISState *env, DisasContext *dc)
  *
  * When the software returns from an exception, the branch will re-execute.
  * On QEMU care needs to be taken when a branch+delayslot sequence is broken
- * and the branch and delayslot dont share pages.
+ * and the branch and delayslot don't share pages.
  *
  * The TB contaning the branch insn will set up env->btarget and evaluate 
  * env->btaken. When the translation loop exits we will note that the branch 
@@ -3236,7 +3247,7 @@ void gen_intermediate_code(CPUCRISState *env, struct TranslationBlock *tb)
         }
 
         /* If we are rexecuting a branch due to exceptions on
-           delay slots dont break.  */
+           delay slots don't break.  */
         if (!(tb->pc & 1) && cs->singlestep_enabled) {
             break;
         }
@@ -3362,41 +3373,41 @@ void cris_initialize_tcg(void)
     int i;
 
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
-    cc_x = tcg_global_mem_new(TCG_AREG0,
+    cc_x = tcg_global_mem_new(cpu_env,
                               offsetof(CPUCRISState, cc_x), "cc_x");
-    cc_src = tcg_global_mem_new(TCG_AREG0,
+    cc_src = tcg_global_mem_new(cpu_env,
                                 offsetof(CPUCRISState, cc_src), "cc_src");
-    cc_dest = tcg_global_mem_new(TCG_AREG0,
+    cc_dest = tcg_global_mem_new(cpu_env,
                                  offsetof(CPUCRISState, cc_dest),
                                  "cc_dest");
-    cc_result = tcg_global_mem_new(TCG_AREG0,
+    cc_result = tcg_global_mem_new(cpu_env,
                                    offsetof(CPUCRISState, cc_result),
                                    "cc_result");
-    cc_op = tcg_global_mem_new(TCG_AREG0,
+    cc_op = tcg_global_mem_new(cpu_env,
                                offsetof(CPUCRISState, cc_op), "cc_op");
-    cc_size = tcg_global_mem_new(TCG_AREG0,
+    cc_size = tcg_global_mem_new(cpu_env,
                                  offsetof(CPUCRISState, cc_size),
                                  "cc_size");
-    cc_mask = tcg_global_mem_new(TCG_AREG0,
+    cc_mask = tcg_global_mem_new(cpu_env,
                                  offsetof(CPUCRISState, cc_mask),
                                  "cc_mask");
 
-    env_pc = tcg_global_mem_new(TCG_AREG0,
+    env_pc = tcg_global_mem_new(cpu_env,
                                 offsetof(CPUCRISState, pc),
                                 "pc");
-    env_btarget = tcg_global_mem_new(TCG_AREG0,
+    env_btarget = tcg_global_mem_new(cpu_env,
                                      offsetof(CPUCRISState, btarget),
                                      "btarget");
-    env_btaken = tcg_global_mem_new(TCG_AREG0,
+    env_btaken = tcg_global_mem_new(cpu_env,
                                     offsetof(CPUCRISState, btaken),
                                     "btaken");
     for (i = 0; i < 16; i++) {
-        cpu_R[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_R[i] = tcg_global_mem_new(cpu_env,
                                       offsetof(CPUCRISState, regs[i]),
                                       regnames[i]);
     }
     for (i = 0; i < 16; i++) {
-        cpu_PR[i] = tcg_global_mem_new(TCG_AREG0,
+        cpu_PR[i] = tcg_global_mem_new(cpu_env,
                                        offsetof(CPUCRISState, pregs[i]),
                                        pregnames[i]);
     }

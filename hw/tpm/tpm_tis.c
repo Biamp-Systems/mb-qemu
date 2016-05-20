@@ -22,6 +22,7 @@
  * TPM Profile (PTP) Specification, Familiy 2.0, Revision 00.43
  */
 
+#include "qemu/osdep.h"
 #include "sysemu/tpm_backend.h"
 #include "tpm_int.h"
 #include "sysemu/block-backend.h"
@@ -30,6 +31,7 @@
 #include "hw/i386/pc.h"
 #include "hw/pci/pci_ids.h"
 #include "tpm_tis.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
 #include "qemu/main-loop.h"
 #include "sysemu/tpm_backend.h"

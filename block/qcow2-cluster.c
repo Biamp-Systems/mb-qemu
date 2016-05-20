@@ -22,11 +22,14 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/osdep.h"
 #include <zlib.h>
 
+#include "qapi/error.h"
 #include "qemu-common.h"
 #include "block/block_int.h"
 #include "block/qcow2.h"
+#include "qemu/bswap.h"
 #include "trace.h"
 
 int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,

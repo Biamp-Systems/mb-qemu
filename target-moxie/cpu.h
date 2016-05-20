@@ -19,7 +19,6 @@
 #ifndef _CPU_MOXIE_H
 #define _CPU_MOXIE_H
 
-#include "config.h"
 #include "qemu-common.h"
 
 #define TARGET_LONG_BITS 32
@@ -130,10 +129,9 @@ static inline int cpu_mmu_index(CPUMoxieState *env, bool ifetch)
 }
 
 #include "exec/cpu-all.h"
-#include "exec/exec-all.h"
 
 static inline void cpu_get_tb_cpu_state(CPUMoxieState *env, target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+                                        target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->pc;
     *cs_base = 0;

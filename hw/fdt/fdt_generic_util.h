@@ -1,6 +1,7 @@
 #ifndef FDT_GENERIC_UTIL_H
 #define FDT_GENERIC_UTIL_H
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "fdt_generic.h"
 

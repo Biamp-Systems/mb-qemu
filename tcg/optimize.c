@@ -23,12 +23,9 @@
  * THE SOFTWARE.
  */
 
-#include "config.h"
-
-#include <stdlib.h>
-#include <stdio.h>
-
+#include "qemu/osdep.h"
 #include "qemu-common.h"
+#include "exec/cpu-common.h"
 #include "tcg-op.h"
 
 #define CASE_OP_32_64(x)                        \
@@ -961,12 +958,12 @@ void tcg_optimize(TCGContext *s)
         }
 
         if (partmask == 0) {
-            assert(nb_oargs == 1);
+            tcg_debug_assert(nb_oargs == 1);
             tcg_opt_gen_movi(s, op, args, args[0], 0);
             continue;
         }
         if (affected == 0) {
-            assert(nb_oargs == 1);
+            tcg_debug_assert(nb_oargs == 1);
             tcg_opt_gen_mov(s, op, args, args[0], args[1]);
             continue;
         }

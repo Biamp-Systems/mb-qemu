@@ -19,7 +19,6 @@
 #ifndef CPU_TILEGX_H
 #define CPU_TILEGX_H
 
-#include "config.h"
 #include "qemu-common.h"
 
 #define TARGET_LONG_BITS 64
@@ -170,13 +169,11 @@ TileGXCPU *cpu_tilegx_init(const char *cpu_model);
 #define cpu_signal_handler cpu_tilegx_signal_handler
 
 static inline void cpu_get_tb_cpu_state(CPUTLGState *env, target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+                                        target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->pc;
     *cs_base = 0;
     *flags = 0;
 }
-
-#include "exec/exec-all.h"
 
 #endif

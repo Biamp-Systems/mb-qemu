@@ -19,9 +19,12 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "qemu-common.h"
 #include "migration/vmstate.h"
+#include "exec/exec-all.h"
 
 
 static void superh_cpu_set_pc(CPUState *cs, vaddr value)

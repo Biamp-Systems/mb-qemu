@@ -20,7 +20,9 @@
 
 #include "cpu.h"
 #include "qemu-common.h"
+#include "qapi/error.h"
 #include "hw/qdev-properties.h"
+#include "exec/log.h"
 
 
 static void nios2_cpu_set_pc(CPUState *cs, vaddr value)

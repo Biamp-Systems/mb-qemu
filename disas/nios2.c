@@ -27,6 +27,7 @@ see <http://www.gnu.org/licenses/>.  */
 #ifndef _NIOS2_H_
 #define _NIOS2_H_
 
+#include "qemu/osdep.h"
 #include "disas/bfd.h"
 
 /****************************************************************************

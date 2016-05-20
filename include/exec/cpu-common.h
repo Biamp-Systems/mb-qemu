@@ -7,14 +7,9 @@
 #include "exec/hwaddr.h"
 #endif
 
-#ifndef NEED_CPU_H
-#include "exec/poison.h"
-#endif
-
 #include "qemu/bswap.h"
 #include "qemu/queue.h"
 #include "qemu/fprintf-fn.h"
-#include "qemu/typedefs.h"
 
 /**
  * CPUListState:
@@ -54,7 +49,6 @@ typedef uintptr_t ram_addr_t;
 #endif
 
 extern ram_addr_t ram_size;
-ram_addr_t get_current_ram_size(void);
 
 /* memory API */
 
@@ -114,16 +108,6 @@ void stl_le_phys(AddressSpace *as, hwaddr addr, uint32_t val);
 void stl_be_phys(AddressSpace *as, hwaddr addr, uint32_t val);
 void stq_le_phys(AddressSpace *as, hwaddr addr, uint64_t val);
 void stq_be_phys(AddressSpace *as, hwaddr addr, uint64_t val);
-
-#ifdef NEED_CPU_H
-uint32_t lduw_phys(AddressSpace *as, hwaddr addr);
-uint32_t ldl_phys(AddressSpace *as, hwaddr addr);
-uint64_t ldq_phys(AddressSpace *as, hwaddr addr);
-void stl_phys_notdirty(AddressSpace *as, hwaddr addr, uint32_t val);
-void stw_phys(AddressSpace *as, hwaddr addr, uint32_t val);
-void stl_phys(AddressSpace *as, hwaddr addr, uint32_t val);
-void stq_phys(AddressSpace *as, hwaddr addr, uint64_t val);
-#endif
 
 void cpu_physical_memory_write_rom(AddressSpace *as, hwaddr addr,
                                    const uint8_t *buf, int len);

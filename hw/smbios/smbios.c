@@ -15,6 +15,8 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu/config-file.h"
 #include "qemu/error-report.h"
 #include "sysemu/sysemu.h"
@@ -319,7 +321,7 @@ static void smbios_register_config(void)
     qemu_add_opts(&qemu_smbios_opts);
 }
 
-machine_init(smbios_register_config);
+opts_init(smbios_register_config);
 
 static void smbios_validate_table(void)
 {
