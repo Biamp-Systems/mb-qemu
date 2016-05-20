@@ -29,7 +29,7 @@ void tlb_fill(CPUState *cs, target_ulong addr, int is_write, int mmu_idx,
 {
     int ret;
 
-    ret = cpu_nios2_handle_mmu_fault(cs, addr, is_write, mmu_idx, 1);
+    ret = nios2_cpu_handle_mmu_fault(cs, addr, is_write, mmu_idx);
     if (unlikely(ret)) {
         if (retaddr) {
             /* now we have a real cpu fault */
@@ -37,14 +37,6 @@ void tlb_fill(CPUState *cs, target_ulong addr, int is_write, int mmu_idx,
         }
         cpu_loop_exit(cs);
     }
-}
-
-void helper_raise_exception(CPUNios2State *env, uint32_t index)
-{
-    CPUState *cs = CPU(nios2_env_get_cpu(env));
-
-    cs->exception_index = index;
-    cpu_loop_exit(cs);
 }
 
 uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)
@@ -55,6 +47,14 @@ uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)
 void helper_mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
 {
     mmu_write(env, rn, v);
+}
+#endif /* !CONFIG_USER_ONLY */
+
+void helper_raise_exception(CPUNios2State *env, uint32_t index)
+{
+    CPUState *cs = ENV_GET_CPU(env);
+    cs->exception_index = index;
+    cpu_loop_exit(cs);
 }
 
 void helper_memalign(CPUNios2State *env, uint32_t addr, uint32_t dr, uint32_t wr, uint32_t mask)
@@ -95,6 +95,3 @@ void helper_ret_status(uint32_t pc)
     qemu_log("%08X: RET RA %08X\n", pc, env->regs[R_RA]);
 }
 #endif
-
-#endif /* !CONFIG_USER_ONLY */
-

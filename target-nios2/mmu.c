@@ -18,14 +18,12 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <assert.h>
-
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
+
+#if !defined(CONFIG_USER_ONLY)
 
 /* Define this to enable MMU debug messages */
 /* #define DEBUG_MMU */
@@ -102,8 +100,7 @@ unsigned int mmu_translate(CPUNios2State *env,
 
 static void mmu_flush_pid(CPUNios2State *env, uint32_t pid)
 {
-    CPUState *cs = CPU(nios2_env_get_cpu(env));
-
+    CPUState *cs = ENV_GET_CPU(env);
     int idx;
     MMU_LOG(qemu_log("TLB Flush PID %d\n", pid));
 
@@ -126,7 +123,7 @@ static void mmu_flush_pid(CPUNios2State *env, uint32_t pid)
 
 void mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
 {
-    CPUState *cs = CPU(nios2_env_get_cpu(env));
+    CPUState *cs = ENV_GET_CPU(env);
 
     MMU_LOG(qemu_log("mmu_write %08X = %08X\n", rn, v));
 
@@ -276,3 +273,4 @@ void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env)
     }
 }
 
+#endif /* !CONFIG_USER_ONLY */

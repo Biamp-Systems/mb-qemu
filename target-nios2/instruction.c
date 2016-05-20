@@ -1134,9 +1134,11 @@ static void rdctl(DisasContext *dc, uint32_t code)
     case CR_TLBACC:
     case CR_TLBMISC:
     {
+#if !defined(CONFIG_USER_ONLY)
         TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
         gen_helper_mmu_read(dc->cpu_R[instr->c], dc->cpu_env, tmp);
         tcg_temp_free_i32(tmp);
+#endif
         break;
     }
 
@@ -1203,9 +1205,11 @@ static void wrctl(DisasContext *dc, uint32_t code)
     case CR_TLBACC:
     case CR_TLBMISC:
     {
+#if !defined(CONFIG_USER_ONLY)
         TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
         gen_helper_mmu_write(dc->cpu_env, tmp, dc->cpu_R[instr->a]);
         tcg_temp_free_i32(tmp);
+#endif
         break;
     }
 

@@ -18,6 +18,10 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+/*
+ * FIXME: Convert to VMstate
+ */
+
 #include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/boards.h"

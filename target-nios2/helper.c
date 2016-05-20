@@ -27,9 +27,8 @@
 #include "qapi/error.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
-#include "qemu/host-utils.h"
-
 #include "exec/log.h"
+#include "qemu/host-utils.h"
 
 #if defined(CONFIG_USER_ONLY)
 
@@ -41,8 +40,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
     env->regs[R_EA] = env->regs[R_PC] + 4;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
-                               int rw, int mmu_idx, int is_softmmu)
+int nios2_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw, int mmu_idx)
 {
     cs->exception_index = 0xaa;
     /* Page 0x1000 is kuser helper */
@@ -202,7 +200,6 @@ static int cpu_nios2_handle_virtual_page(
 {
     Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
-
     target_ulong vaddr, paddr;
     Nios2MMULookup lu;
     unsigned int hit;
@@ -240,8 +237,7 @@ static int cpu_nios2_handle_virtual_page(
     return 1;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
-                               int rw, int mmu_idx, int is_softmmu)
+int nios2_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw, int mmu_idx)
 {
     Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
@@ -296,7 +292,7 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
             paddr = lu.paddr + vaddr - lu.vaddr;
         } else {
             paddr = -1;
-            qemu_log("cpu_get_phys_page debug MISS: %08X\n", addr);
+            qemu_log("cpu_get_phys_page debug MISS: %08lX\n", addr);
         }
     } else {
         paddr = addr & TARGET_PAGE_MASK;

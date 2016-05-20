@@ -18,12 +18,13 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
-#include "cpu.h"
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qapi/error.h"
+#include "cpu.h"
 #include "hw/qdev-properties.h"
 #include "exec/log.h"
-
+#include "exec/gdbstub.h"
 
 static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -73,27 +74,21 @@ static void nios2_cpu_reset(CPUState *cs)
     env->regs[R_PC] = env->reset_addr;
 
 #if defined(CONFIG_USER_ONLY)
-    /* start in user mode with interrupts enabled.  */
+    /* Start in user mode with interrupts enabled. */
     env->regs[CR_STATUS] = CR_STATUS_U | CR_STATUS_PIE;
 #else
     mmu_init(&env->mmu);
 #endif
 }
 
-static void nios2_disas_set_info(CPUState *cpu, disassemble_info *info)
-{
-    info->mach = bfd_arch_nios2;
-    info->print_insn = print_insn_nios2;
-}
-
 static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
-    Nios2CPUClass *mcc = NIOS2_CPU_GET_CLASS(dev);
+    Nios2CPUClass *ncc = NIOS2_CPU_GET_CLASS(dev);
 
     qemu_init_vcpu(cs);
 
-    mcc->parent_realize(dev, errp);
+    ncc->parent_realize(dev, errp);
 }
 
 static void nios2_cpu_initfn(Object *obj)
@@ -109,7 +104,55 @@ static void nios2_cpu_initfn(Object *obj)
     /* Inbound IRQ line */
     qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 1);
 #endif
+}
 
+static void nios2_cpu_disas_set_info(CPUState *cpu, disassemble_info *info)
+{
+    /* NOTE: NiosII R2 is not supported yet. */
+    info->mach = bfd_arch_nios2;
+#ifdef TARGET_WORDS_BIGENDIAN
+    info->print_insn = print_insn_big_nios2;
+#else
+    info->print_insn = print_insn_little_nios2;
+#endif
+}
+
+static int nios2_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
+{
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUClass *cc = CPU_GET_CLASS(cs);
+    CPUNios2State *env = &cpu->env;
+
+    if (n > cc->gdb_num_core_regs)
+        return 0;
+
+    if (n < 32)		/* GP regs */
+        return gdb_get_reg32(mem_buf, env->regs[n]);
+    else if (n == 32)	/* PC */
+        return gdb_get_reg32(mem_buf, env->regs[R_PC]);
+    else if (n < 49)	/* Status regs */
+        return gdb_get_reg32(mem_buf, env->regs[n - 1]);
+    /* Invalid regs */
+    return 0;
+}
+
+static int nios2_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
+{
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUClass *cc = CPU_GET_CLASS(cs);
+    CPUNios2State *env = &cpu->env;
+
+    if (n > cc->gdb_num_core_regs)
+        return 0;
+
+    if (n < 32)		/* GP regs */
+        env->regs[n] = ldl_p(mem_buf);
+    else if (n == 32)	/* PC */
+        env->regs[R_PC] = ldl_p(mem_buf);
+    else if (n < 49)	/* Status regs */
+        env->regs[n - 1] = ldl_p(mem_buf);
+
+    return 4;
 }
 
 static Property nios2_properties[] = {
@@ -132,6 +175,7 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     cc->cpu_exec_interrupt = nios2_cpu_exec_interrupt;
     cc->dump_state = nios2_cpu_dump_state;
     cc->set_pc = nios2_cpu_set_pc;
+    cc->disas_set_info = nios2_cpu_disas_set_info;
 #ifdef CONFIG_USER_ONLY
     cc->handle_mmu_fault = mb_cpu_handle_mmu_fault;
 #else
@@ -139,7 +183,9 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 #endif
     dc->props = nios2_properties;
 
-    cc->disas_set_info = nios2_disas_set_info;
+    cc->gdb_read_register = nios2_cpu_gdb_read_register;
+    cc->gdb_write_register = nios2_cpu_gdb_write_register;
+    cc->gdb_num_core_regs = 49;
 
     /*
      * Reason: nios2_cpu_initfn() calls cpu_exec_init(), which saves

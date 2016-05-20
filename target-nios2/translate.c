@@ -94,7 +94,7 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     /* Dump the CPU state to the log */
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
         qemu_log("--------------\n");
-        log_cpu_state(CPU(env), 0);
+        log_cpu_state(cs, 0);
     }
 
     /* Set up instruction counts */
@@ -215,10 +215,12 @@ void nios2_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
             cpu_fprintf(f, "\n");
         }
     }
+#if !defined(CONFIG_USER_ONLY)
     cpu_fprintf(f, " mmu write: VPN=%05X PID %02X TLBACC %08X\n",
                 env->mmu.pteaddr_wr & CR_PTEADDR_VPN_MASK,
                 (env->mmu.tlbmisc_wr & CR_TLBMISC_PID_MASK) >> 4,
                 env->mmu.tlbacc_wr);
+#endif
     cpu_fprintf(f, "\n\n");
 }
 

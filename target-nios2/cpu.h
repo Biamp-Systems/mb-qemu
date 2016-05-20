@@ -73,7 +73,7 @@ typedef struct Nios2CPUClass {
 /* GP regs + CR regs + PC */
 #define NUM_CORE_REGS (32 + 32 + 1)
 
-/* General purpose egister aliases */
+/* General purpose register aliases */
 #define R_ZERO   0
 #define R_AT     1
 #define R_RET0   2
@@ -108,6 +108,7 @@ typedef struct Nios2CPUClass {
 #define CR_IENABLE   (CR_BASE + 3)
 #define CR_IPENDING  (CR_BASE + 4)
 #define CR_CPUID     (CR_BASE + 5)
+#define CR_CTL6      (CR_BASE + 6)
 #define CR_EXCEPTION (CR_BASE + 7)
 #define CR_PTEADDR   (CR_BASE + 8)
 #define   CR_PTEADDR_PTBASE_SHIFT 22
@@ -134,6 +135,7 @@ typedef struct Nios2CPUClass {
 #define   CR_TLBMISC_BAD       (1<<2)
 #define   CR_TLBMISC_PERM      (1<<1)
 #define   CR_TLBMISC_D         (1<<0)
+#define CR_ENCINJ    (CR_BASE + 11)
 #define CR_BADADDR   (CR_BASE + 12)
 #define CR_CONFIG    (CR_BASE + 13)
 #define CR_MPUBASE   (CR_BASE + 14)
@@ -219,14 +221,7 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
 #define TARGET_PHYS_ADDR_SPACE_BITS 32
 #define TARGET_VIRT_ADDR_SPACE_BITS 32
 
-static inline CPUNios2State *cpu_init(const char *cpu_model)
-{
-    Nios2CPU *cpu = cpu_nios2_init(cpu_model);
-    if (cpu == NULL) {
-        return NULL;
-    }
-    return &cpu->env;
-}
+#define cpu_init(cpu_model) CPU(cpu_nios2_init(cpu_model))
 
 #define cpu_exec cpu_nios2_exec
 #define cpu_gen_code cpu_nios2_gen_code
@@ -248,8 +243,8 @@ static inline int cpu_mmu_index(CPUNios2State *env, bool ifetch)
                                                   MMU_SUPERVISOR_IDX;
 }
 
-int cpu_nios2_handle_mmu_fault(CPUState *cs, target_ulong address,
-                               int rw, int mmu_idx, int is_softmmu);
+int nios2_cpu_handle_mmu_fault(CPUState *env, vaddr address,
+                               int rw, int mmu_idx);
 
 #if defined(CONFIG_USER_ONLY)
 static inline void cpu_clone_regs(CPUNios2State *env, target_ulong newsp)
@@ -278,7 +273,7 @@ static inline target_ulong cpu_get_pc(CPUNios2State *env)
 }
 
 static inline void cpu_get_tb_cpu_state(CPUNios2State *env, target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+                                        target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->regs[R_PC];
     *cs_base = 0;
