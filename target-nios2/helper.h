@@ -39,4 +39,3 @@ DEF_HELPER_2(divs, i32, i32, i32)
 DEF_HELPER_2(divu, i32, i32, i32)
 
 DEF_HELPER_5(memalign, void, env, i32, i32, i32, i32)
-

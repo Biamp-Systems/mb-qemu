@@ -19,6 +19,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
+#include "qapi/error.h"
+
 #include "hw/sysbus.h"
 #include "cpu.h"
 
@@ -27,14 +30,13 @@
     OBJECT_CHECK(AlteraIIC, (obj), TYPE_ALTERA_IIC)
 
 typedef struct AlteraIIC {
-    SysBusDevice busdev;
-    void        *cpu;
-    qemu_irq     parent_irq;
+    SysBusDevice  parent_obj;
+    void         *cpu;
+    qemu_irq      parent_irq;
 } AlteraIIC;
 
 static void update_irq(AlteraIIC *pv)
 {
-    uint32_t i;
     CPUNios2State *env = &((Nios2CPU*)(pv->cpu))->env;
 
     if ((env->regs[CR_STATUS] & CR_STATUS_PIE) == 0) {
@@ -42,17 +44,8 @@ static void update_irq(AlteraIIC *pv)
         return;
     }
 
-    for (i = 0; i < 32; i++) {
-        if (env->regs[CR_IPENDING] &
-            env->regs[CR_IENABLE] & (1 << i)) {
-            break;
-        }
-    }
-    if (i == 32) {
-        qemu_irq_lower(pv->parent_irq);
-    } else {
-        qemu_irq_raise(pv->parent_irq);
-    }
+    qemu_set_irq(pv->parent_irq,
+                (env->regs[CR_IPENDING] & env->regs[CR_IENABLE]) ? 1 : 0);
 }
 
 static void irq_handler(void *opaque, int irq, int level)
@@ -61,7 +54,7 @@ static void irq_handler(void *opaque, int irq, int level)
     CPUNios2State *env = &((Nios2CPU*)(pv->cpu))->env;
 
     env->regs[CR_IPENDING] &= ~(1 << irq);
-    env->regs[CR_IPENDING] |= level << irq;
+    env->regs[CR_IPENDING] |= (level ? 1 : 0) << irq;
 
     update_irq(pv);
 }
@@ -79,11 +72,24 @@ static Property altera_iic_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+static void altera_iic_realize(DeviceState *dev, Error **errp)
+{
+    struct AlteraIIC *pv = ALTERA_IIC(dev);
+
+    if (!pv->cpu) {
+        error_setg(errp, "altera,iic: CPU not connected");
+        return;
+    }
+}
+
 static void altera_iic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->props = altera_iic_properties;
+    /* Reason: pointer property "cpu" */
+    dc->cannot_instantiate_with_device_add_yet = true;
+    dc->realize = altera_iic_realize;
 }
 
 static TypeInfo altera_iic_info = {
@@ -100,4 +106,3 @@ static void altera_iic_register(void)
 }
 
 type_init(altera_iic_register)
-

@@ -207,11 +207,10 @@ static inline Nios2CPU *nios2_env_get_cpu(CPUNios2State *env)
 
 #define ENV_OFFSET offsetof(Nios2CPU, env)
 
+void nios2_tcg_init(void);
 Nios2CPU *cpu_nios2_init(const char *cpu_model);
-int cpu_nios2_exec(CPUState *s);
-void cpu_nios2_close(CPUNios2State *s);
+int cpu_nios2_exec(CPUState *cs);
 void nios2_cpu_do_interrupt(CPUState *cs);
-bool nios2_cpu_exec_interrupt(CPUState *cs, int int_req);
 int cpu_nios2_signal_handler(int host_signum, void *pinfo, void *puc);
 void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env);
 void nios2_cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
@@ -255,6 +254,7 @@ static inline int cpu_interrupts_enabled(CPUNios2State *env)
 }
 
 #include "exec/cpu-all.h"
+#include "exec/exec-all.h"
 
 static inline target_ulong cpu_get_pc(CPUNios2State *env)
 {
@@ -268,8 +268,6 @@ static inline void cpu_get_tb_cpu_state(CPUNios2State *env, target_ulong *pc,
     *cs_base = 0;
     *flags = (env->regs[CR_STATUS] & (CR_STATUS_EH | CR_STATUS_U));
 }
-
-#include "exec/exec-all.h"
 
 static inline void cpu_pc_from_tb(CPUNios2State *env, TranslationBlock *tb)
 {

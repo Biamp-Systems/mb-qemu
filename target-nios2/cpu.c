@@ -76,9 +76,46 @@ static void nios2_cpu_reset(CPUState *cs)
 #if defined(CONFIG_USER_ONLY)
     /* Start in user mode with interrupts enabled. */
     env->regs[CR_STATUS] = CR_STATUS_U | CR_STATUS_PIE;
-#else
+#endif
+}
+
+static void nios2_cpu_initfn(Object *obj)
+{
+    CPUState *cs = CPU(obj);
+    Nios2CPU *cpu = NIOS2_CPU(obj);
+    CPUNios2State *env = &cpu->env;
+    static bool tcg_initialized = false;
+
+    cs->env_ptr = env;
+    cpu_exec_init(cs, &error_abort);
+
+#if !defined(CONFIG_USER_ONLY)
+    /* Inbound IRQ line */
+    qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 1);
+
     mmu_init(&env->mmu);
 #endif
+
+    if (tcg_enabled() && !tcg_initialized) {
+        tcg_initialized = true;
+        nios2_tcg_init();
+    }
+}
+
+Nios2CPU *cpu_nios2_init(const char *cpu_model)
+{
+    Nios2CPU *cpu = NIOS2_CPU(object_new(TYPE_NIOS2_CPU));
+
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
+
+    cpu->env.reset_addr = RESET_ADDRESS;
+    cpu->env.exception_addr = EXCEPTION_ADDRESS;
+    cpu->env.fast_tlb_miss_addr = FAST_TLB_MISS_ADDRESS;
+
+    cpu_reset(CPU(cpu));
+    qemu_init_vcpu(CPU(cpu));
+
+    return cpu;
 }
 
 static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
@@ -92,19 +129,18 @@ static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
     ncc->parent_realize(dev, errp);
 }
 
-static void nios2_cpu_initfn(Object *obj)
+static bool nios2_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
-    CPUState *cs = CPU(obj);
-    Nios2CPU *cpu = NIOS2_CPU(obj);
+    Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
 
-    cs->env_ptr = env;
-    cpu_exec_init(cs, &error_abort);
-
-#ifndef CONFIG_USER_ONLY
-    /* Inbound IRQ line */
-    qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 1);
-#endif
+    if ((interrupt_request & CPU_INTERRUPT_HARD) &&
+        (env->regs[CR_STATUS] & CR_STATUS_PIE)) {
+        cs->exception_index = EXCP_IRQ;
+        nios2_cpu_do_interrupt(cs);
+        return true;
+    }
+    return false;
 }
 
 static void nios2_cpu_disas_set_info(CPUState *cpu, disassemble_info *info)

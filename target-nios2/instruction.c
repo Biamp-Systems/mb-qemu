@@ -23,16 +23,9 @@
 
 #include "instruction.h"
 #include "exec/exec-all.h"
+#include "disas/disas.h"
 #include "exec/helper-proto.h"
-
-#include "exec/cpu_ldst.h"
 #include "exec/helper-gen.h"
-
-/* TODO: These local functions conflict with new macros in cpu_ldst.h,
-   but the INSTRUCTION macro needs them to be named correctly... */
-#undef ldw
-#undef stb
-#undef stw
 
 static inline uint32_t get_opcode(uint32_t code)
 {
@@ -1381,10 +1374,22 @@ illegal_op:
     t_gen_helper_raise_exception(dc, EXCP_ILLEGAL);
 }
 
+#include "exec/cpu_ldst.h"
+
 void handle_instruction(DisasContext *dc, CPUNios2State *env)
 {
-    uint32_t insn = cpu_ldl_code(env, dc->pc);
-    uint32_t op = get_opcode(insn);
+    uint32_t insn;
+    uint32_t op;
+#if defined(CONFIG_USER_ONLY)
+    /* FIXME: Is this needed ? */
+    if (dc->pc >= 0x1000 && dc->pc < 0x2000) {
+        env->regs[R_PC] = dc->pc;
+        t_gen_helper_raise_exception(dc, 0xaa);
+       return;
+    }
+#endif
+    insn = cpu_ldl_code(env, dc->pc);
+    op = get_opcode(insn);
 
     LOG_DIS("%8.8x\t", insn);
 

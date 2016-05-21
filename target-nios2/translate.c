@@ -87,7 +87,7 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     dc->cpu_env = cpu_env;
     dc->cpu_R   = cpu_R;
     dc->is_jmp  = DISAS_NEXT;
-    dc->pc      = tb->pc;
+    dc->pc      = pc_start;
     dc->tb      = tb;
     dc->mem_idx = cpu_mmu_index(env, false);
 
@@ -98,8 +98,6 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     }
 
     /* Set up instruction counts */
-    next_page_start = (tb->pc & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
-
     num_insns = 0;
     max_insns = tb->cflags & CF_COUNT_MASK;
     if (max_insns == 0) {
@@ -108,9 +106,12 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     if (max_insns > TCG_MAX_INSNS) {
         max_insns = TCG_MAX_INSNS;
     }
+    next_page_start = (pc_start & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
 
     gen_tb_start(tb);
     do {
+        LOG_DIS("%8.8x:\t", dc->pc);
+
         tcg_gen_insn_start(dc->pc);
         num_insns++;
 
@@ -123,7 +124,6 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
 
         if (unlikely(cpu_breakpoint_test(cs, dc->pc, BP_ANY))) {
             t_gen_raise_exception(dc, EXCP_DEBUG);
-            dc->is_jmp = DISAS_UPDATE;
             /* The address covered by the breakpoint must be included in
                [tb->pc, tb->pc + tb->size) in order to for it to be
                properly cleared -- thus we increment the PC here so that
@@ -132,9 +132,7 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
             break;
         }
 
-        LOG_DIS("%8.8x:\t", dc->pc);
-
-        if (num_insns == max_insns && (tb->cflags & CF_LAST_IO)) {
+        if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO)) {
             gen_io_start();
         }
 
@@ -187,8 +185,8 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
 #ifdef DEBUG_DISAS
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
         qemu_log("----------------\n");
-        qemu_log("IN: %s\n", lookup_symbol(tb->pc));
-        log_target_disas(cs, tb->pc, dc->pc - tb->pc, 0);
+        qemu_log("IN: %s\n", lookup_symbol(pc_start));
+        log_target_disas(cs, pc_start, dc->pc - pc_start, 0);
         qemu_log("\nisize=%d osize=%d\n",
                  dc->pc - pc_start, tcg_op_buf_count());
     }
@@ -224,21 +222,9 @@ void nios2_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
     cpu_fprintf(f, "\n\n");
 }
 
-Nios2CPU *cpu_nios2_init(const char *cpu_model)
+void nios2_tcg_init(void)
 {
-    Nios2CPU *cpu;
     int i;
-
-    cpu = NIOS2_CPU(object_new(TYPE_NIOS2_CPU));
-
-    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
-
-    cpu->env.reset_addr = RESET_ADDRESS;
-    cpu->env.exception_addr = EXCEPTION_ADDRESS;
-    cpu->env.fast_tlb_miss_addr = FAST_TLB_MISS_ADDRESS;
-
-    cpu_reset(CPU(cpu));
-    qemu_init_vcpu(CPU(cpu));
 
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
 
@@ -247,8 +233,6 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
                                       offsetof(CPUNios2State, regs[i]),
                                       regnames[i]);
     }
-
-    return cpu;
 }
 
 void restore_state_to_opc(CPUNios2State *env, TranslationBlock *tb,
@@ -256,4 +240,3 @@ void restore_state_to_opc(CPUNios2State *env, TranslationBlock *tb,
 {
     env->regs[R_PC] = data[0];
 }
-
