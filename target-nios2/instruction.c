@@ -1218,6 +1218,13 @@ static void wrctl(DisasContext *dc, uint32_t code)
         break;
     }
 
+    /* If interrupts were enabled using WRCTL, trigger them. */
+#if !defined(CONFIG_USER_ONLY)
+    if ((instr->imm5 + 32) == CR_STATUS) {
+        gen_helper_check_interrupts(dc->cpu_env);
+    }
+#endif
+
     gen_set_label(l1);
 }
 

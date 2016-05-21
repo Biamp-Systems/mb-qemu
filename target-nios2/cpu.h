@@ -218,6 +218,9 @@ void nios2_cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
                           int flags);
 hwaddr nios2_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
 
+qemu_irq *nios2_cpu_pic_init(Nios2CPU *cpu);
+void nios2_check_interrupts(CPUNios2State *env);
+
 #define TARGET_PHYS_ADDR_SPACE_BITS 32
 #define TARGET_VIRT_ADDR_SPACE_BITS 32
 

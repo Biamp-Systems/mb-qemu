@@ -1,1 +1,2 @@
-obj-y  = labx_nios2_devicetree.o
+obj-y = boot.o cpu_pic.o 10m50_devboard.o
+obj-y += labx_nios2_devicetree.o

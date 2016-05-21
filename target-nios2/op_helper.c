@@ -48,6 +48,11 @@ void helper_mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
 {
     mmu_write(env, rn, v);
 }
+
+void helper_check_interrupts(CPUNios2State *env)
+{
+    nios2_check_interrupts(env);
+}
 #endif /* !CONFIG_USER_ONLY */
 
 void helper_raise_exception(CPUNios2State *env, uint32_t index)
