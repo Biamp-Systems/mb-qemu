@@ -5873,8 +5873,7 @@ for i in $ARCH $TARGET_BASE_ARCH ; do
     disas_config "MOXIE"
   ;;
   nios2)
-    echo "CONFIG_NIOS2_DIS=y"  >> $config_target_mak
-    echo "CONFIG_NIOS2_DIS=y"  >> config-all-disas.mak
+    disas_config "NIOS2"
   ;;
   or32)
     disas_config "OPENRISC"
