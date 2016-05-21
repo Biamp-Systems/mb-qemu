@@ -87,6 +87,7 @@ static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
     Nios2CPUClass *ncc = NIOS2_CPU_GET_CLASS(dev);
 
     qemu_init_vcpu(cs);
+    cpu_reset(cs);
 
     ncc->parent_realize(dev, errp);
 }
@@ -177,7 +178,7 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     cc->set_pc = nios2_cpu_set_pc;
     cc->disas_set_info = nios2_cpu_disas_set_info;
 #ifdef CONFIG_USER_ONLY
-    cc->handle_mmu_fault = mb_cpu_handle_mmu_fault;
+    cc->handle_mmu_fault = nios2_cpu_handle_mmu_fault;
 #else
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
 #endif

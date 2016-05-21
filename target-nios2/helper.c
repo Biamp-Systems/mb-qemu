@@ -36,7 +36,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
 {
     Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
-    env->exception_index = -1;
+    cs->exception_index = -1;
     env->regs[R_EA] = env->regs[R_PC] + 4;
 }
 

@@ -246,20 +246,6 @@ static inline int cpu_mmu_index(CPUNios2State *env, bool ifetch)
 int nios2_cpu_handle_mmu_fault(CPUState *env, vaddr address,
                                int rw, int mmu_idx);
 
-#if defined(CONFIG_USER_ONLY)
-static inline void cpu_clone_regs(CPUNios2State *env, target_ulong newsp)
-{
-    if (newsp) {
-        env->regs[R_SP] = newsp;
-    }
-    env->regs[R_RET0] = 0;
-}
-#endif
-
-static inline void cpu_set_tls(CPUNios2State *env, target_ulong newtls)
-{
-}
-
 static inline int cpu_interrupts_enabled(CPUNios2State *env)
 {
     return env->regs[CR_STATUS] & CR_STATUS_PIE;
