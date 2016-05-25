@@ -62,9 +62,9 @@ static TCGv cpu_R[NUM_CORE_REGS];
 
 #include "exec/gen-icount.h"
 
-static inline void t_gen_raise_exception(DisasContext *dc, uint32_t index)
+static inline void gen_exception(DisasContext *dc, uint32_t excp)
 {
-    TCGv_i32 tmp = tcg_const_i32(index);
+    TCGv_i32 tmp = tcg_const_i32(excp);
 
     tcg_gen_movi_tl(cpu_R[R_PC], dc->pc);
     gen_helper_raise_exception(cpu_env, tmp);
@@ -123,7 +123,7 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
 #endif
 
         if (unlikely(cpu_breakpoint_test(cs, dc->pc, BP_ANY))) {
-            t_gen_raise_exception(dc, EXCP_DEBUG);
+            gen_exception(dc, EXCP_DEBUG);
             /* The address covered by the breakpoint must be included in
                [tb->pc, tb->pc + tb->size) in order to for it to be
                properly cleared -- thus we increment the PC here so that
@@ -179,6 +179,7 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     /* End off the block */
     gen_tb_end(tb, num_insns);
 
+    /* Mark instruction starts for the final generated instruction */
     tb->size = dc->pc - pc_start;
     tb->icount = num_insns;
 

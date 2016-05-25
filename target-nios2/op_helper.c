@@ -23,22 +23,6 @@
 #include "exec/cpu_ldst.h"
 
 #if !defined(CONFIG_USER_ONLY)
-
-void tlb_fill(CPUState *cs, target_ulong addr, int is_write, int mmu_idx,
-              uintptr_t retaddr)
-{
-    int ret;
-
-    ret = nios2_cpu_handle_mmu_fault(cs, addr, is_write, mmu_idx);
-    if (unlikely(ret)) {
-        if (retaddr) {
-            /* now we have a real cpu fault */
-            cpu_restore_state(cs, retaddr);
-        }
-        cpu_loop_exit(cs);
-    }
-}
-
 uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)
 {
     return mmu_read(env, rn);

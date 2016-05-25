@@ -256,22 +256,12 @@ static inline int cpu_interrupts_enabled(CPUNios2State *env)
 #include "exec/cpu-all.h"
 #include "exec/exec-all.h"
 
-static inline target_ulong cpu_get_pc(CPUNios2State *env)
-{
-    return env->regs[R_PC];
-}
-
 static inline void cpu_get_tb_cpu_state(CPUNios2State *env, target_ulong *pc,
                                         target_ulong *cs_base, uint32_t *flags)
 {
     *pc = env->regs[R_PC];
     *cs_base = 0;
     *flags = (env->regs[CR_STATUS] & (CR_STATUS_EH | CR_STATUS_U));
-}
-
-static inline void cpu_pc_from_tb(CPUNios2State *env, TranslationBlock *tb)
-{
-    env->regs[R_PC] = tb->pc;
 }
 
 #endif /* CPU_NIOS2_H */

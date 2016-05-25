@@ -112,9 +112,6 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
     cpu->env.exception_addr = EXCEPTION_ADDRESS;
     cpu->env.fast_tlb_miss_addr = FAST_TLB_MISS_ADDRESS;
 
-    cpu_reset(CPU(cpu));
-    qemu_init_vcpu(CPU(cpu));
-
     return cpu;
 }
 
@@ -142,6 +139,7 @@ static bool nios2_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     }
     return false;
 }
+
 
 static void nios2_cpu_disas_set_info(CPUState *cpu, disassemble_info *info)
 {
@@ -207,6 +205,8 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 
     ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
+
+//FIXME    cc->class_by_name = nios2_cpu_class_by_name;
     cc->has_work = nios2_cpu_has_work;
     cc->do_interrupt = nios2_cpu_do_interrupt;
     cc->cpu_exec_interrupt = nios2_cpu_exec_interrupt;
@@ -217,6 +217,7 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     cc->handle_mmu_fault = nios2_cpu_handle_mmu_fault;
 #else
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
+/* FIXME *///    cc->do_unassigned_access = nios2_cpu_unassigned_access;
 #endif
     dc->props = nios2_properties;
 
