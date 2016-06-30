@@ -24,6 +24,7 @@
 #include "cpu.h"
 #include "exec/log.h"
 #include "exec/gdbstub.h"
+#include "hw/qdev-properties.h"
 
 static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -70,6 +71,7 @@ static void nios2_cpu_initfn(Object *obj)
     CPUNios2State *env = &cpu->env;
     static bool tcg_initialized;
 
+    cpu->mmu_present = true;
     cs->env_ptr = env;
     cpu_exec_init(cs, &error_abort);
 
@@ -166,6 +168,13 @@ static int nios2_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
 
     return 4;
 }
+
+static Property nios2_properties[] = {
+    DEFINE_PROP_BOOL("mmu_present", Nios2CPU, mmu_present, true),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+
 static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
@@ -174,7 +183,7 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 
     ncc->parent_realize = dc->realize;
     dc->realize = nios2_cpu_realizefn;
-
+    dc->props = nios2_properties;
     ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
 

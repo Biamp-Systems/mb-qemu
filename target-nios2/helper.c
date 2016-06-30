@@ -52,7 +52,7 @@ int nios2_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw, int mmu_idx)
 
 #else /* !CONFIG_USER_ONLY */
 
-bool has_mmu = true;
+
 
 void nios2_cpu_do_interrupt(CPUState *cs)
 {
@@ -242,7 +242,7 @@ int nios2_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw, int mmu_idx)
     Nios2CPU *cpu = NIOS2_CPU(cs);
     CPUNios2State *env = &cpu->env;
 
-    if (has_mmu) {
+    if (cpu->mmu_present) {
         if (MMU_SUPERVISOR_IDX == mmu_idx) {
             if (address >= 0xC0000000) {
                 /* Kernel physical page - TLB bypassed */
@@ -285,7 +285,7 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     Nios2MMULookup lu;
     unsigned int hit;
 
-    if (has_mmu && (addr < 0xC0000000)) {
+    if (cpu->mmu_present && (addr < 0xC0000000)) {
         hit = mmu_translate(env, &lu, addr, 0, 0);
         if (hit) {
             vaddr = addr & TARGET_PAGE_MASK;
