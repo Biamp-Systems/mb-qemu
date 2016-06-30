@@ -86,6 +86,7 @@ static void nios2_cpu_initfn(Object *obj)
     CPUNios2State *env = &cpu->env;
     static bool tcg_initialized;
 
+    cpu->mmu_present = true;
     cs->env_ptr = env;
     cpu_exec_init(cs, &error_abort);
 
@@ -191,6 +192,7 @@ static int nios2_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
 }
 
 static Property nios2_properties[] = {
+    DEFINE_PROP_BOOL("mmu_present", Nios2CPU, mmu_present, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -202,7 +204,7 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 
     ncc->parent_realize = dc->realize;
     dc->realize = nios2_cpu_realizefn;
-
+    dc->props = nios2_properties;
     ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
 
@@ -219,8 +221,6 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
 /* FIXME *///    cc->do_unassigned_access = nios2_cpu_unassigned_access;
 #endif
-    dc->props = nios2_properties;
-
     cc->gdb_read_register = nios2_cpu_gdb_read_register;
     cc->gdb_write_register = nios2_cpu_gdb_write_register;
     cc->gdb_num_core_regs = 49;

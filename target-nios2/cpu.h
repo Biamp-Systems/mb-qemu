@@ -196,6 +196,7 @@ typedef struct Nios2CPU {
     /*< public >*/
 
     CPUNios2State env;
+    bool mmu_present;
 } Nios2CPU;
 
 static inline Nios2CPU *nios2_env_get_cpu(CPUNios2State *env)
