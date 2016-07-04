@@ -42,6 +42,8 @@
 #include "hw/fdt/fdt_generic_devices.h"
 #include "hw/fdt/fdt_generic_util.h"
 
+#include "boot.h"
+
 #include <libfdt.h>
 
 #define LMB_BRAM_SIZE  (128 * 1024)
@@ -104,39 +106,6 @@ static void *get_device_tree(int *fdt_size)
     return fdt;
 }
 
-static int labx_load_device_tree(hwaddr addr,
-                                 uint32_t ramsize,
-                                 hwaddr initrd_base,
-                                 hwaddr initrd_size,
-                                 const char *kernel_cmdline)
-{
-    int fdt_size;
-    void *fdt;
-    int r;
-
-    fdt = get_device_tree(&fdt_size);
-
-    if (!fdt) {
-        return 0;
-    }
-
-    if (kernel_cmdline && strlen(kernel_cmdline)) {
-        r = qemu_fdt_setprop_string(fdt, "/chosen", "bootargs",
-                                        kernel_cmdline);
-        if (r < 0) {
-            fprintf(stderr, "couldn't set /chosen/bootargs\n");
-        }
-    }
-    cpu_physical_memory_write(addr, (void *)fdt, fdt_size);
-
-    return fdt_size;
-}
-
-static uint64_t translate_kernel_address(void *opaque, uint64_t addr)
-{
-    return addr - 0xC0000000LL;
-}
-
 static ram_addr_t get_dram_base(void *fdt)
 {
     Error *errp = NULL;
@@ -161,6 +130,8 @@ typedef struct DevInfo {
  * Interrupt controller device
  */
 
+static Nios2CPU *cpu0 = NULL;
+
 static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offset)
 {
     //int i;
@@ -170,6 +141,10 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
     Nios2CPU *cpu = cpu_nios2_init("nios2");
 
     qemu_register_reset(main_cpu_reset, cpu);
+
+    if (!cpu0) {
+        cpu0 = cpu;
+    }
 
 #if 0 /* TODO: Finish off the vectored-interrupt-controller */
     int reglen;
@@ -195,7 +170,7 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
        the device-tree one */
 #if 0
     cpu->env.reset_addr =
-        qemu_fdt_getprop_cell(fdt, node_path, "ALTR,reset-addr", NULL, 0, 0, &errp);
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,reset-addr", NULL, 0, 0, &errp);
 #else
     cpu->env.reset_addr = 0xc0000000;
 #endif
@@ -299,10 +274,10 @@ static void labx_nios2_init(MachineState *machine)
     }
 
     memory_region_init_ram(phys_ram, NULL, "nios2.ram", ram_size, &error_fatal);
+    memory_region_init_alias(phys_ram_alias, NULL, "nios2.ram.alias",
+                             phys_ram, 0, ram_size);
     vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
-    memory_region_init_alias(phys_ram_alias, NULL, "nios2.ram.mirror",
-                             phys_ram, 0, ram_size);
     memory_region_add_subregion(address_space_mem, ddr_base + 0xc0000000,
                                 phys_ram_alias);
 
@@ -312,67 +287,8 @@ static void labx_nios2_init(MachineState *machine)
     /* Create other devices listed in the device-tree */
     fdt_init_destroy_fdti(fdt_generic_create_machine(fdt, NULL));
 
-    if (machine->kernel_filename) {
-        uint64_t entry = 0, low = 0, high = 0;
-        uint32_t base32 = 0;
-
-        /* Boots a kernel elf binary.  */
-        kernel_size = load_elf(machine->kernel_filename, NULL, NULL,
-                               &entry, &low, &high,
-                               0, EM_ALTERA_NIOS2, 0, 0);
-        base32 = entry;
-        if (base32 == 0xc0000000) {
-            kernel_size = load_elf(machine->kernel_filename, translate_kernel_address,
-                                   NULL, &entry, NULL, NULL,
-                                   0, EM_ALTERA_NIOS2, 0, 0);
-        }
-        /* Always boot into physical ram.  */
-        boot_info.bootstrap_pc = ddr_base + 0xc0000000 + (entry & 0x07ffffff);
-
-        /* If it wasn't an ELF image, try an u-boot image.  */
-        if (kernel_size < 0) {
-            hwaddr uentry, loadaddr;
-
-            kernel_size = load_uimage(machine->kernel_filename, &uentry, &loadaddr, 0,
-                                      NULL, NULL);
-            boot_info.bootstrap_pc = uentry;
-            high = (loadaddr + kernel_size + 3) & ~3;
-        }
-
-        /* Not an ELF image nor an u-boot image, try a RAW image.  */
-        if (kernel_size < 0) {
-            kernel_size = load_image_targphys(machine->kernel_filename, ddr_base,
-                                              ram_size);
-            boot_info.bootstrap_pc = ddr_base;
-            high = (ddr_base + kernel_size + 3) & ~3;
-        }
-
-        if (machine->initrd_filename) {
-            uint32_t initrd_base = 0x88c00000;
-            uint32_t initrd_size =
-                load_image_targphys(machine->initrd_filename, initrd_base,
-                                    ram_size - initrd_base);
-            if (initrd_size <= 0) {
-                fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
-                        machine->initrd_filename);
-                exit(1);
-            }
-
-            boot_info.initrd = initrd_base;
-        } else {
-            boot_info.initrd = 0x00000000;
-        }
-
-        boot_info.cmdline = high + 4096;
-        if (machine->kernel_cmdline && strlen(machine->kernel_cmdline)) {
-            pstrcpy_targphys("cmdline", boot_info.cmdline, 256, machine->kernel_cmdline);
-        }
-        /* Provide a device-tree.  */
-        boot_info.fdt = boot_info.cmdline + 4096;
-        labx_load_device_tree(boot_info.fdt, ram_size,
-                              0, 0,
-                              machine->kernel_cmdline);
-    }
+    nios2_load_kernel(cpu0, ddr_base, ram_size, machine->initrd_filename,
+                      BINARY_DEVICE_TREE_FILE, NULL);
 }
 
 static void labx_nios2_devicetree_machine_init(MachineClass *mc)
