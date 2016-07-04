@@ -33,6 +33,8 @@
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
+#include "hw/nios2/nios2_iic.h"
+#include "hw/nios2/altera_timer.h"
 
 #include "boot.h"
 
@@ -41,7 +43,7 @@
 static void nios2_10m50_ghrd_init(MachineState *machine)
 {
     Nios2CPU *cpu;
-    DeviceState *dev;
+
     MemoryRegion *address_space_mem = get_system_memory();
     MemoryRegion *phys_tcm = g_new(MemoryRegion, 1);
     MemoryRegion *phys_tcm_alias = g_new(MemoryRegion, 1);
@@ -51,7 +53,7 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
     ram_addr_t tcm_size = 0x1000;    /* 1 kiB, but QEMU limit is 4 kiB */
     ram_addr_t ram_base = 0x08000000;
     ram_addr_t ram_size = 0x08000000;
-    qemu_irq *cpu_irq, irq[32];
+    qemu_irq irq[32];
     int i;
 
     /* Physical TCM (tb_ram_1k) with alias at 0xc0000000 */
@@ -75,34 +77,20 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
     /* Create CPU -- FIXME */
     cpu = cpu_nios2_init("nios2");
 
-    /* Register: CPU interrupt controller (PIC) */
-    cpu_irq = nios2_cpu_pic_init(cpu);
-
-    /* Register: Internal Interrupt Controller (IIC) */
-    dev = qdev_create(NULL, "altera,iic");
-    qdev_prop_set_ptr(dev, "cpu", cpu);
-    qdev_init_nofail(dev);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, cpu_irq[0]);
-    for (i = 0; i < 32; i++)
-        irq[i] = qdev_get_gpio_in(dev, i);
+    nios2_iic_create(cpu);
+    for (i = 0; i < 32; i++) {
+        irq[i] = qdev_get_gpio_in(cpu->env.pic_state, i);
+    }
 
     /* Register: Altera 16550 UART */
     serial_mm_init(address_space_mem, 0xf8001600, 2, irq[1], 115200,
                    serial_hds[0], DEVICE_NATIVE_ENDIAN);
 
     /* Register: Timer sys_clk_timer  */
-    dev = qdev_create(NULL, "ALTR.timer");
-    qdev_prop_set_uint32(dev, "clock-frequency", 75 * 1000000);
-    qdev_init_nofail(dev);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xf8001440);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq[0]);
+    altera_timer_create(0xf8001440, irq[0], 75 * 1000000);
 
     /* Register: Timer sys_clk_timer_1  */
-    dev = qdev_create(NULL, "ALTR.timer");
-    qdev_prop_set_uint32(dev, "clock-frequency", 75 * 1000000);
-    qdev_init_nofail(dev);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xe0000880);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq[5]);
+    altera_timer_create(0xe0000880, irq[5], 75 * 1000000);
 
     /* Configure new exception vectors and reset CPU for it to take effect. */
     cpu->env.reset_addr = 0xd4000000;
