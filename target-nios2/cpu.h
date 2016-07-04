@@ -2,6 +2,7 @@
  * Altera Nios II virtual CPU header
  *
  * Copyright (c) 2012 Chris Wulff <crwulff@gmail.com>
+ * Copyright (c) 2016 Intel Corporation.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -179,6 +180,8 @@ struct CPUNios2State {
 
 #if !defined(CONFIG_USER_ONLY)
     Nios2MMU mmu;
+    /* interrupt controller handle for callbacks */
+    DeviceState *pic_state;
 #endif
 
     CPU_COMMON
@@ -216,9 +219,6 @@ void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env);
 void nios2_cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
                           int flags);
 hwaddr nios2_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
-
-qemu_irq *nios2_cpu_pic_init(Nios2CPU *cpu);
-void nios2_check_interrupts(CPUNios2State *env);
 
 #define TARGET_PHYS_ADDR_SPACE_BITS 32
 #define TARGET_VIRT_ADDR_SPACE_BITS 32
