@@ -25,6 +25,7 @@
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
 #include "hw/ptimer.h"
+#include "hw/nios2/altera_timer.h"
 
 #define R_STATUS      0
 #define R_CONTROL     1
@@ -194,6 +195,24 @@ static void altera_timer_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     sysbus_init_irq(sbd, &t->irq);
+}
+
+void altera_timer_create(const hwaddr addr, qemu_irq irq, uint32_t frequency)
+{
+    DeviceState *dev;
+    SysBusDevice *bus;
+
+    dev = qdev_create(NULL, TYPE_ALTERA_TIMER);
+
+    qdev_prop_set_uint32(dev, "clock-frequency", frequency);
+    bus = SYS_BUS_DEVICE(dev);
+    qdev_init_nofail(dev);
+
+    if (addr != (hwaddr)-1) {
+        sysbus_mmio_map(bus, 0, addr);
+    }
+
+    sysbus_connect_irq(bus, 0, irq);
 }
 
 static Property altera_timer_properties[] = {
