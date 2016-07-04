@@ -91,6 +91,13 @@ void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
     dc->tb      = tb;
     dc->mem_idx = cpu_mmu_index(env, false);
 
+#ifndef CONFIG_USER_ONLY
+    if ((env->regs[CR_STATUS] & CR_STATUS_U) == CR_STATUS_U) {
+        dc->user = true;
+    } else {
+        dc->user = false;
+    }
+#endif
     /* Dump the CPU state to the log */
     if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
         qemu_log("--------------\n");

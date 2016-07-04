@@ -3,6 +3,7 @@
  *  (Portions of this file that were originally from nios2sim-ng.)
  *
  * Copyright (C) 2012 Chris Wulff <crwulff@gmail.com>
+ * Copyright (C) 2016 Intel Corporation.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -81,23 +82,6 @@ static void illegal_instruction(DisasContext *dc,
     t_gen_helper_raise_exception(dc, EXCP_ILLEGAL);
 }
 
-static void gen_check_supervisor(DisasContext *dc, TCGLabel *label)
-{
-    TCGLabel *l1 = gen_new_label();
-
-    TCGv_i32 tmp = tcg_temp_new();
-    tcg_gen_andi_tl(tmp, dc->cpu_R[CR_STATUS], CR_STATUS_U);
-    tcg_gen_brcond_tl(TCG_COND_EQ, dc->cpu_R[R_ZERO], tmp, l1);
-    t_gen_helper_raise_exception(dc, EXCP_SUPERI);
-    tcg_gen_br(label);
-
-    gen_set_label(l1);
-    tcg_temp_free_i32(tmp);
-
-    /* If we aren't taking the exception, update the PC to the
-     * next instruction */
-    tcg_gen_movi_tl(dc->cpu_R[R_PC], dc->pc+4);
-}
 
 /*
  * Used as a placeholder for all instructions which do not have an effect on the
@@ -787,8 +771,11 @@ static void eret(DisasContext *dc, uint32_t code __attribute__((unused)))
 
     tcg_gen_mov_tl(dc->cpu_R[CR_STATUS], dc->cpu_R[CR_ESTATUS]);
     tcg_gen_mov_tl(dc->cpu_R[R_PC], dc->cpu_R[R_EA]);
-
-    dc->is_jmp = DISAS_JUMP;
+    /* Re-evaluate interrupts */
+#if !defined(CONFIG_USER_ONLY)
+    gen_helper_cr_status_write(dc->cpu_env, dc->cpu_R[CR_STATUS]);
+#endif
+    dc->is_jmp = DISAS_UPDATE;
 }
 
 /* rC <- rA rotated left IMM5 bit positions */
@@ -1117,30 +1104,29 @@ static void _div(DisasContext *dc, uint32_t code)
 /* rC <- ctlN */
 static void rdctl(DisasContext *dc, uint32_t code)
 {
-    R_TYPE(instr, code);
+    if (IS_USER(dc)) {
+        illegal_instruction(dc, 0);
+    } else {
+        R_TYPE(instr, code);
 
-    TCGLabel *l1 = gen_new_label();
-    gen_check_supervisor(dc, l1);
-
-    switch (instr->imm5 + 32) {
-    case CR_PTEADDR:
-    case CR_TLBACC:
-    case CR_TLBMISC:
-    {
+        switch (instr->imm5 + 32) {
+        case CR_PTEADDR:
+        case CR_TLBACC:
+        case CR_TLBMISC:
+        {
 #if !defined(CONFIG_USER_ONLY)
-        TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
-        gen_helper_mmu_read(dc->cpu_R[instr->c], dc->cpu_env, tmp);
-        tcg_temp_free_i32(tmp);
+            TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
+            gen_helper_mmu_read(dc->cpu_R[instr->c], dc->cpu_env, tmp);
+            tcg_temp_free_i32(tmp);
 #endif
-        break;
-    }
+            break;
+        }
 
-    default:
-        tcg_gen_mov_tl(dc->cpu_R[instr->c], dc->cpu_R[instr->imm5 + 32]);
-        break;
+        default:
+            tcg_gen_mov_tl(dc->cpu_R[instr->c], dc->cpu_R[instr->imm5 + 32]);
+            break;
+        }
     }
-
-    gen_set_label(l1);
 }
 
 /* rC <- (rA * rB))(31..0) */
@@ -1188,37 +1174,50 @@ static void trap(DisasContext *dc, uint32_t code __attribute__((unused)))
 /* ctlN <- rA */
 static void wrctl(DisasContext *dc, uint32_t code)
 {
-    R_TYPE(instr, code);
+    if (IS_USER(dc)) {
+        illegal_instruction(dc, 0);
+    } else {
+        R_TYPE(instr, code);
 
-    TCGLabel *l1 = gen_new_label();
-    gen_check_supervisor(dc, l1);
-
-    switch (instr->imm5 + 32) {
-    case CR_PTEADDR:
-    case CR_TLBACC:
-    case CR_TLBMISC:
-    {
+        switch (instr->imm5 + 32) {
+        case CR_PTEADDR:
+        case CR_TLBACC:
+        case CR_TLBMISC:
+        {
 #if !defined(CONFIG_USER_ONLY)
-        TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
-        gen_helper_mmu_write(dc->cpu_env, tmp, dc->cpu_R[instr->a]);
-        tcg_temp_free_i32(tmp);
+            TCGv_i32 tmp = tcg_const_i32(instr->imm5 + 32);
+            gen_helper_mmu_write(dc->cpu_env, tmp, dc->cpu_R[instr->a]);
+            tcg_temp_free_i32(tmp);
 #endif
-        break;
-    }
+            break;
+        }
 
-    default:
-        tcg_gen_mov_tl(dc->cpu_R[instr->imm5 + 32], dc->cpu_R[instr->a]);
-        break;
-    }
+        case CR_IPENDING: /* read only, ignore writes */
+            break;
 
-    /* If interrupts were enabled using WRCTL, trigger them. */
+        case CR_IENABLE:
+            /* Re-evaluate interrupts */
 #if !defined(CONFIG_USER_ONLY)
-    if ((instr->imm5 + 32) == CR_STATUS) {
-        gen_helper_check_interrupts(dc->cpu_env);
-    }
+            gen_helper_cr_ienable_write(dc->cpu_env, dc->cpu_R[instr->a]);
+            tcg_gen_movi_tl(dc->cpu_R[R_PC], dc->pc + 4);
+            dc->is_jmp = DISAS_UPDATE;
 #endif
+            break;
 
-    gen_set_label(l1);
+        case CR_STATUS:
+            /* Re-evaluate interrupts */
+#if !defined(CONFIG_USER_ONLY)
+            gen_helper_cr_status_write(dc->cpu_env, dc->cpu_R[instr->a]);
+            tcg_gen_movi_tl(dc->cpu_R[R_PC], dc->pc + 4);
+            dc->is_jmp = DISAS_UPDATE;
+#endif
+            break;
+
+        default:
+            tcg_gen_mov_tl(dc->cpu_R[instr->imm5 + 32], dc->cpu_R[instr->a]);
+            break;
+        }
+    }
 }
 
 /*

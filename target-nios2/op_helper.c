@@ -2,6 +2,7 @@
  * Altera Nios II helper routines.
  *
  * Copyright (C) 2012 Chris Wulff <crwulff@gmail.com>
+ * Copyright (C) 2016 Intel Corporation.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,6 +22,7 @@
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
+#include "hw/nios2/nios2_iic.h"
 
 #if !defined(CONFIG_USER_ONLY)
 uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)
@@ -33,9 +35,16 @@ void helper_mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
     mmu_write(env, rn, v);
 }
 
-void helper_check_interrupts(CPUNios2State *env)
+void helper_cr_ienable_write(CPUNios2State *env, uint32_t value)
 {
-    nios2_check_interrupts(env);
+    env->regs[CR_IENABLE] = value;
+    nios2_iic_update_cr_ienable(env->pic_state);
+}
+
+void helper_cr_status_write(CPUNios2State *env, uint32_t value)
+{
+    env->regs[CR_STATUS] = value;
+    nios2_iic_update_cr_status(env->pic_state);
 }
 #endif /* !CONFIG_USER_ONLY */
 

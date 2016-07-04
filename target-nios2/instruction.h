@@ -4,6 +4,7 @@
  *  (Portions of this file that were originally from nios2sim-ng.)
  *
  * Copyright (C) 2012 Chris Wulff <crwulff@gmail.com>
+ * Copyright (C) 2016 Intel Corporation.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -250,7 +251,14 @@ typedef struct DisasContext {
     target_ulong      pc;
     TranslationBlock *tb;
     int               mem_idx;
+    bool              user;
 } DisasContext;
+
+#if defined(CONFIG_USER_ONLY)
+#define IS_USER(s) true
+#else
+#define IS_USER(s) (s->user)
+#endif
 
 typedef void (*instruction_handler)(DisasContext *dc, uint32_t opcode);
 

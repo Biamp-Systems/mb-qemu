@@ -29,10 +29,12 @@ DEF_HELPER_1(ret_status, void, i32)
 
 DEF_HELPER_2(raise_exception, void, env, i32)
 
+
 #if !defined(CONFIG_USER_ONLY)
 DEF_HELPER_2(mmu_read, i32, env, i32)
 DEF_HELPER_3(mmu_write, void, env, i32, i32)
-DEF_HELPER_1(check_interrupts, void, env)
+DEF_HELPER_2(cr_ienable_write, void, env, i32)
+DEF_HELPER_2(cr_status_write, void, env, i32)
 #endif
 
 DEF_HELPER_2(divs, i32, i32, i32)
