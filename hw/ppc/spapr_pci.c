@@ -322,7 +322,7 @@ static void rtas_ibm_change_msi(PowerPCCPU *cpu, sPAPRMachineState *spapr,
             return;
         }
 
-        xics_free(spapr->icp, msi->first_irq, msi->num);
+        xics_spapr_free(spapr->xics, msi->first_irq, msi->num);
         if (msi_present(pdev)) {
             spapr_msi_setmsg(pdev, 0, false, 0, 0);
         }
@@ -360,7 +360,7 @@ static void rtas_ibm_change_msi(PowerPCCPU *cpu, sPAPRMachineState *spapr,
     }
 
     /* Allocate MSIs */
-    irq = xics_alloc_block(spapr->icp, 0, req_num, false,
+    irq = xics_spapr_alloc_block(spapr->xics, 0, req_num, false,
                            ret_intr_type == RTAS_TYPE_MSI, &err);
     if (err) {
         error_reportf_err(err, "Can't allocate MSIs for device %x: ",
@@ -371,7 +371,7 @@ static void rtas_ibm_change_msi(PowerPCCPU *cpu, sPAPRMachineState *spapr,
 
     /* Release previous MSIs */
     if (msi) {
-        xics_free(spapr->icp, msi->first_irq, msi->num);
+        xics_spapr_free(spapr->xics, msi->first_irq, msi->num);
         g_hash_table_remove(phb->msi, &config_addr);
     }
 
@@ -733,7 +733,7 @@ static void spapr_msi_write(void *opaque, hwaddr addr,
 
     trace_spapr_pci_msi_write(addr, data, irq);
 
-    qemu_irq_pulse(xics_get_qirq(spapr->icp, irq));
+    qemu_irq_pulse(xics_get_qirq(spapr->xics, irq));
 }
 
 static const MemoryRegionOps spapr_msi_ops = {
@@ -1093,13 +1093,11 @@ static void spapr_phb_add_pci_device(sPAPRDRConnector *drc,
         spapr_tce_set_need_vfio(tcet, true);
     }
 
-    if (dev->hotplugged) {
-        fdt = create_device_tree(&fdt_size);
-        fdt_start_offset = spapr_create_pci_child_dt(phb, pdev, fdt, 0);
-        if (!fdt_start_offset) {
-            error_setg(errp, "Failed to create pci child device tree node");
-            goto out;
-        }
+    fdt = create_device_tree(&fdt_size);
+    fdt_start_offset = spapr_create_pci_child_dt(phb, pdev, fdt, 0);
+    if (!fdt_start_offset) {
+        error_setg(errp, "Failed to create pci child device tree node");
+        goto out;
     }
 
     drck->attach(drc, DEVICE(pdev),
@@ -1312,7 +1310,6 @@ static void spapr_phb_realize(DeviceState *dev, Error **errp)
     PCIBus *bus;
     uint64_t msi_window_size = 4096;
     sPAPRTCETable *tcet;
-    uint32_t nb_table;
 
     if (sphb->index != (uint32_t)-1) {
         hwaddr windows_base;
@@ -1445,7 +1442,8 @@ static void spapr_phb_realize(DeviceState *dev, Error **errp)
         uint32_t irq;
         Error *local_err = NULL;
 
-        irq = xics_alloc_block(spapr->icp, 0, 1, true, false, &local_err);
+        irq = xics_spapr_alloc_block(spapr->xics, 0, 1, true, false,
+                                     &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             error_prepend(errp, "can't allocate LSIs: ");
@@ -1464,18 +1462,15 @@ static void spapr_phb_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    nb_table = sphb->dma_win_size >> SPAPR_TCE_PAGE_SHIFT;
-    tcet = spapr_tce_new_table(DEVICE(sphb), sphb->dma_liobn,
-                               0, SPAPR_TCE_PAGE_SHIFT, nb_table, false);
+    tcet = spapr_tce_new_table(DEVICE(sphb), sphb->dma_liobn);
     if (!tcet) {
         error_setg(errp, "Unable to create TCE table for %s",
                    sphb->dtbusname);
         return;
     }
 
-    /* Register default 32bit DMA window */
-    memory_region_add_subregion(&sphb->iommu_root, sphb->dma_win_addr,
-                                spapr_tce_get_iommu(tcet));
+    memory_region_add_subregion_overlap(&sphb->iommu_root, 0,
+                                        spapr_tce_get_iommu(tcet), 0);
 
     sphb->msi = g_hash_table_new_full(g_int_hash, g_int_equal, g_free, g_free);
 }
@@ -1491,8 +1486,25 @@ static int spapr_phb_children_reset(Object *child, void *opaque)
     return 0;
 }
 
+void spapr_phb_dma_reset(sPAPRPHBState *sphb)
+{
+    sPAPRTCETable *tcet = spapr_tce_find_by_liobn(sphb->dma_liobn);
+
+    if (tcet && tcet->nb_table) {
+        spapr_tce_table_disable(tcet);
+    }
+
+    /* Register default 32bit DMA window */
+    spapr_tce_table_enable(tcet, SPAPR_TCE_PAGE_SHIFT, sphb->dma_win_addr,
+                           sphb->dma_win_size >> SPAPR_TCE_PAGE_SHIFT);
+}
+
 static void spapr_phb_reset(DeviceState *qdev)
 {
+    sPAPRPHBState *sphb = SPAPR_PCI_HOST_BRIDGE(qdev);
+
+    spapr_phb_dma_reset(sphb);
+
     /* Reset the IOMMU state */
     object_child_foreach(OBJECT(qdev), spapr_phb_children_reset, NULL);
 
@@ -1626,7 +1638,6 @@ static void spapr_phb_class_init(ObjectClass *klass, void *data)
     dc->reset = spapr_phb_reset;
     dc->vmsd = &vmstate_spapr_pci;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
-    dc->cannot_instantiate_with_device_add_yet = false;
     hp->plug = spapr_phb_hot_plug_child;
     hp->unplug = spapr_phb_hot_unplug_child;
 }
@@ -1791,7 +1802,7 @@ int spapr_populate_pci_dt(sPAPRPHBState *phb,
     _FDT(fdt_setprop(fdt, bus_off, "ranges", &ranges, sizeof_ranges));
     _FDT(fdt_setprop(fdt, bus_off, "reg", &bus_reg, sizeof(bus_reg)));
     _FDT(fdt_setprop_cell(fdt, bus_off, "ibm,pci-config-space-type", 0x1));
-    _FDT(fdt_setprop_cell(fdt, bus_off, "ibm,pe-total-#msi", XICS_IRQS));
+    _FDT(fdt_setprop_cell(fdt, bus_off, "ibm,pe-total-#msi", XICS_IRQS_SPAPR));
 
     /* Build the interrupt-map, this must matches what is done
      * in pci_spapr_map_irq
@@ -1816,7 +1827,7 @@ int spapr_populate_pci_dt(sPAPRPHBState *phb,
     _FDT(fdt_setprop(fdt, bus_off, "interrupt-map", &interrupt_map,
                      sizeof(interrupt_map)));
 
-    tcet = spapr_tce_find_by_liobn(SPAPR_PCI_LIOBN(phb->index, 0));
+    tcet = spapr_tce_find_by_liobn(phb->dma_liobn);
     if (!tcet) {
         return -1;
     }

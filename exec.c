@@ -19,7 +19,6 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #ifndef _WIN32
-#include <sys/mman.h>
 #endif
 
 #include "qemu/cutils.h"
@@ -56,6 +55,8 @@
 #include "exec/memory-internal.h"
 #include "exec/ram_addr.h"
 #include "exec/log.h"
+
+#include "migration/vmstate.h"
 
 #include "qemu/range.h"
 #ifndef _WIN32
@@ -612,15 +613,9 @@ static int cpu_get_free_index(Error **errp)
     return cpu;
 }
 
-void cpu_exec_exit(CPUState *cpu)
+static void cpu_release_index(CPUState *cpu)
 {
-    if (cpu->cpu_index == -1) {
-        /* cpu_index was never allocated by this @cpu or was already freed. */
-        return;
-    }
-
     bitmap_clear(cpu_index_map, cpu->cpu_index, 1);
-    cpu->cpu_index = -1;
 }
 #else
 
@@ -635,10 +630,41 @@ static int cpu_get_free_index(Error **errp)
     return cpu_index;
 }
 
-void cpu_exec_exit(CPUState *cpu)
+static void cpu_release_index(CPUState *cpu)
 {
+    return;
 }
 #endif
+
+void cpu_exec_exit(CPUState *cpu)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+
+#if defined(CONFIG_USER_ONLY)
+    cpu_list_lock();
+#endif
+    if (cpu->cpu_index == -1) {
+        /* cpu_index was never allocated by this @cpu or was already freed. */
+#if defined(CONFIG_USER_ONLY)
+        cpu_list_unlock();
+#endif
+        return;
+    }
+
+    QTAILQ_REMOVE(&cpus, cpu, node);
+    cpu_release_index(cpu);
+    cpu->cpu_index = -1;
+#if defined(CONFIG_USER_ONLY)
+    cpu_list_unlock();
+#endif
+
+    if (cc->vmsd != NULL) {
+        vmstate_unregister(NULL, cc->vmsd, cpu);
+    }
+    if (qdev_get_vmsd(DEVICE(cpu)) == NULL) {
+        vmstate_unregister(NULL, &vmstate_cpu_common, cpu);
+    }
+}
 
 void cpu_exec_init(CPUState *cpu, Error **errp)
 {
@@ -1046,8 +1072,7 @@ hwaddr memory_region_section_get_iotlb(CPUState *cpu,
 
     if (memory_region_is_ram(section->mr)) {
         /* Normal RAM.  */
-        iotlb = (memory_region_get_ram_addr(section->mr) & TARGET_PAGE_MASK)
-            + xlat;
+        iotlb = memory_region_get_ram_addr(section->mr) + xlat;
         if (!section->readonly) {
             iotlb |= PHYS_SECTION_NOTDIRTY;
         } else {
@@ -1299,7 +1324,7 @@ static void *file_ram_alloc(RAMBlock *block,
     }
 
     page_size = qemu_fd_getpagesize(fd);
-    block->mr->align = page_size;
+    block->mr->align = MAX(page_size, QEMU_VMALLOC_ALIGN);
 
     if (memory < page_size) {
         error_setg(errp, "memory size 0x" RAM_ADDR_FMT " must be equal to "
@@ -1320,7 +1345,8 @@ static void *file_ram_alloc(RAMBlock *block,
         perror("ftruncate");
     }
 
-    area = qemu_ram_mmap(fd, memory, page_size, block->flags & RAM_SHARED);
+    area = qemu_ram_mmap(fd, memory, block->mr->align,
+                         block->flags & RAM_SHARED);
     if (area == MAP_FAILED) {
         error_setg_errno(errp, errno,
                          "unable to map backing store for guest RAM");
@@ -1410,34 +1436,16 @@ static void qemu_ram_setup_dump(void *addr, ram_addr_t size)
     }
 }
 
-/* Called within an RCU critical section, or while the ramlist lock
- * is held.
- */
-static RAMBlock *find_ram_block(ram_addr_t addr)
-{
-    RAMBlock *block;
-
-    QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
-        if (block->offset == addr) {
-            return block;
-        }
-    }
-
-    return NULL;
-}
-
 const char *qemu_ram_get_idstr(RAMBlock *rb)
 {
     return rb->idstr;
 }
 
 /* Called with iothread lock held.  */
-void qemu_ram_set_idstr(ram_addr_t addr, const char *name, DeviceState *dev)
+void qemu_ram_set_idstr(RAMBlock *new_block, const char *name, DeviceState *dev)
 {
-    RAMBlock *new_block, *block;
+    RAMBlock *block;
 
-    rcu_read_lock();
-    new_block = find_ram_block(addr);
     assert(new_block);
     assert(!new_block->idstr[0]);
 
@@ -1450,8 +1458,10 @@ void qemu_ram_set_idstr(ram_addr_t addr, const char *name, DeviceState *dev)
     }
     pstrcat(new_block->idstr, sizeof(new_block->idstr), name);
 
+    rcu_read_lock();
     QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
-        if (block != new_block && !strcmp(block->idstr, new_block->idstr)) {
+        if (block != new_block &&
+            !strcmp(block->idstr, new_block->idstr)) {
             fprintf(stderr, "RAMBlock \"%s\" already registered, abort!\n",
                     new_block->idstr);
             abort();
@@ -1461,21 +1471,15 @@ void qemu_ram_set_idstr(ram_addr_t addr, const char *name, DeviceState *dev)
 }
 
 /* Called with iothread lock held.  */
-void qemu_ram_unset_idstr(ram_addr_t addr)
+void qemu_ram_unset_idstr(RAMBlock *block)
 {
-    RAMBlock *block;
-
     /* FIXME: arch_init.c assumes that this is not called throughout
      * migration.  Ignore the problem since hot-unplug during migration
      * does not work anyway.
      */
-
-    rcu_read_lock();
-    block = find_ram_block(addr);
     if (block) {
         memset(block->idstr, 0, sizeof(block->idstr));
     }
-    rcu_read_unlock();
 }
 
 static int memory_try_enable_merging(void *addr, size_t len)
@@ -1495,10 +1499,8 @@ static int memory_try_enable_merging(void *addr, size_t len)
  * resize callback to update device state and/or add assertions to detect
  * misuse, if necessary.
  */
-int qemu_ram_resize(ram_addr_t base, ram_addr_t newsize, Error **errp)
+int qemu_ram_resize(RAMBlock *block, ram_addr_t newsize, Error **errp)
 {
-    RAMBlock *block = find_ram_block(base);
-
     assert(block);
 
     newsize = HOST_PAGE_ALIGN(newsize);
@@ -1839,40 +1841,6 @@ void qemu_ram_remap(ram_addr_t addr, ram_addr_t length)
 }
 #endif /* !_WIN32 */
 
-int qemu_get_ram_fd(ram_addr_t addr)
-{
-    RAMBlock *block;
-    int fd;
-
-    rcu_read_lock();
-    block = qemu_get_ram_block(addr);
-    fd = block->fd;
-    rcu_read_unlock();
-    return fd;
-}
-
-void qemu_set_ram_fd(ram_addr_t addr, int fd)
-{
-    RAMBlock *block;
-
-    rcu_read_lock();
-    block = qemu_get_ram_block(addr);
-    block->fd = fd;
-    rcu_read_unlock();
-}
-
-void *qemu_get_ram_block_host_ptr(ram_addr_t addr)
-{
-    RAMBlock *block;
-    void *ptr;
-
-    rcu_read_lock();
-    block = qemu_get_ram_block(addr);
-    ptr = ramblock_ptr(block, 0);
-    rcu_read_unlock();
-    return ptr;
-}
-
 /* Return a host pointer to ram allocated with qemu_ram_alloc.
  * This should not be used for general purpose DMA.  Use address_space_map
  * or address_space_rw instead. For local memory (e.g. video ram) that the
@@ -1880,12 +1848,13 @@ void *qemu_get_ram_block_host_ptr(ram_addr_t addr)
  *
  * Called within RCU critical section.
  */
-void *qemu_get_ram_ptr(RAMBlock *ram_block, ram_addr_t addr)
+void *qemu_map_ram_ptr(RAMBlock *ram_block, ram_addr_t addr)
 {
     RAMBlock *block = ram_block;
 
     if (block == NULL) {
         block = qemu_get_ram_block(addr);
+        addr -= block->offset;
     }
 
     if (xen_enabled() && block->host == NULL) {
@@ -1899,10 +1868,10 @@ void *qemu_get_ram_ptr(RAMBlock *ram_block, ram_addr_t addr)
 
         block->host = xen_map_cache(block->offset, block->max_length, 1);
     }
-    return ramblock_ptr(block, addr - block->offset);
+    return ramblock_ptr(block, addr);
 }
 
-/* Return a host pointer to guest's ram. Similar to qemu_get_ram_ptr
+/* Return a host pointer to guest's ram. Similar to qemu_map_ram_ptr
  * but takes a size argument.
  *
  * Called within RCU critical section.
@@ -1911,16 +1880,15 @@ static void *qemu_ram_ptr_length(RAMBlock *ram_block, ram_addr_t addr,
                                  hwaddr *size)
 {
     RAMBlock *block = ram_block;
-    ram_addr_t offset_inside_block;
     if (*size == 0) {
         return NULL;
     }
 
     if (block == NULL) {
         block = qemu_get_ram_block(addr);
+        addr -= block->offset;
     }
-    offset_inside_block = addr - block->offset;
-    *size = MIN(*size, block->max_length - offset_inside_block);
+    *size = MIN(*size, block->max_length - addr);
 
     if (xen_enabled() && block->host == NULL) {
         /* We need to check if the requested address is in the RAM
@@ -1934,7 +1902,7 @@ static void *qemu_ram_ptr_length(RAMBlock *ram_block, ram_addr_t addr,
         block->host = xen_map_cache(block->offset, block->max_length, 1);
     }
 
-    return ramblock_ptr(block, offset_inside_block);
+    return ramblock_ptr(block, addr);
 }
 
 /*
@@ -1955,18 +1923,18 @@ static void *qemu_ram_ptr_length(RAMBlock *ram_block, ram_addr_t addr,
  * ram_addr_t.
  */
 RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
-                                   ram_addr_t *ram_addr,
                                    ram_addr_t *offset)
 {
     RAMBlock *block;
     uint8_t *host = ptr;
 
     if (xen_enabled()) {
+        ram_addr_t ram_addr;
         rcu_read_lock();
-        *ram_addr = xen_ram_addr_from_mapcache(ptr);
-        block = qemu_get_ram_block(*ram_addr);
+        ram_addr = xen_ram_addr_from_mapcache(ptr);
+        block = qemu_get_ram_block(ram_addr);
         if (block) {
-            *offset = (host - block->host);
+            *offset = ram_addr - block->offset;
         }
         rcu_read_unlock();
         return block;
@@ -1996,7 +1964,6 @@ found:
     if (round_offset) {
         *offset &= TARGET_PAGE_MASK;
     }
-    *ram_addr = block->offset + *offset;
     rcu_read_unlock();
     return block;
 }
@@ -2023,18 +1990,17 @@ RAMBlock *qemu_ram_block_by_name(const char *name)
 
 /* Some of the softmmu routines need to translate from a host pointer
    (typically a TLB entry) back to a ram offset.  */
-MemoryRegion *qemu_ram_addr_from_host(void *ptr, ram_addr_t *ram_addr)
+ram_addr_t qemu_ram_addr_from_host(void *ptr)
 {
     RAMBlock *block;
-    ram_addr_t offset; /* Not used */
+    ram_addr_t offset;
 
-    block = qemu_ram_block_from_host(ptr, false, ram_addr, &offset);
-
+    block = qemu_ram_block_from_host(ptr, false, &offset);
     if (!block) {
-        return NULL;
+        return RAM_ADDR_INVALID;
     }
 
-    return block->mr;
+    return block->offset + offset;
 }
 
 /* Called within RCU critical section.  */
@@ -2046,13 +2012,13 @@ static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
     }
     switch (size) {
     case 1:
-        stb_p(qemu_get_ram_ptr(NULL, ram_addr), val);
+        stb_p(qemu_map_ram_ptr(NULL, ram_addr), val);
         break;
     case 2:
-        stw_p(qemu_get_ram_ptr(NULL, ram_addr), val);
+        stw_p(qemu_map_ram_ptr(NULL, ram_addr), val);
         break;
     case 4:
-        stl_p(qemu_get_ram_ptr(NULL, ram_addr), val);
+        stl_p(qemu_map_ram_ptr(NULL, ram_addr), val);
         break;
     default:
         abort();
@@ -2124,7 +2090,7 @@ static void check_watchpoint(int offset, int len, MemTxAttrs attrs, int flags)
                 } else {
                     cpu_get_tb_cpu_state(env, &pc, &cs_base, &cpu_flags);
                     tb_gen_code(cpu, pc, cs_base, cpu_flags, 1);
-                    cpu_resume_from_signal(cpu, NULL);
+                    cpu_loop_exit_noexc(cpu);
                 }
             }
         } else {
@@ -2514,6 +2480,8 @@ static void invalidate_and_set_dirty(MemoryRegion *mr, hwaddr addr,
                                      hwaddr length)
 {
     uint8_t dirty_log_mask = memory_region_get_dirty_log_mask(mr);
+    addr += memory_region_get_ram_addr(mr);
+
     /* No early return if dirty_log_mask is or becomes 0, because
      * cpu_physical_memory_set_dirty_range will still call
      * xen_modified_memory.
@@ -2626,9 +2594,8 @@ static MemTxResult address_space_write_continue(AddressSpace *as, hwaddr addr,
                 abort();
             }
         } else {
-            addr1 += memory_region_get_ram_addr(mr);
             /* RAM case */
-            ptr = qemu_get_ram_ptr(mr->ram_block, addr1);
+            ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
             memcpy(ptr, buf, l);
             invalidate_and_set_dirty(mr, addr1, l);
         }
@@ -2719,8 +2686,7 @@ MemTxResult address_space_read_continue(AddressSpace *as, hwaddr addr,
             }
         } else {
             /* RAM case */
-            ptr = qemu_get_ram_ptr(mr->ram_block,
-                                   memory_region_get_ram_addr(mr) + addr1);
+            ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
             memcpy(buf, ptr, l);
         }
 
@@ -2810,7 +2776,7 @@ static inline void cpu_physical_memory_write_rom_internal(AddressSpace *as,
 
             addr1 += memory_region_get_ram_addr(mr);
             /* ROM/RAM case */
-            ptr = qemu_get_ram_ptr(mr->ram_block, addr1);
+            ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
             switch (type) {
             case WRITE_DATA:
                 memcpy(ptr, buf, l);
@@ -2968,7 +2934,6 @@ void *address_space_map(AddressSpace *as,
     hwaddr done = 0;
     hwaddr l, xlat, base;
     MemoryRegion *mr, *this_mr;
-    ram_addr_t raddr;
     void *ptr;
 
     if (len == 0) {
@@ -3003,7 +2968,6 @@ void *address_space_map(AddressSpace *as,
     }
 
     base = xlat;
-    raddr = memory_region_get_ram_addr(mr);
 
     for (;;) {
         len -= l;
@@ -3022,7 +2986,7 @@ void *address_space_map(AddressSpace *as,
 
     memory_region_ref(mr);
     *plen = done;
-    ptr = qemu_ram_ptr_length(mr->ram_block, raddr + base, plen);
+    ptr = qemu_ram_ptr_length(mr->ram_block, base, plen);
     rcu_read_unlock();
 
     return ptr;
@@ -3039,7 +3003,7 @@ void address_space_unmap(AddressSpace *as, void *buffer, hwaddr len,
         MemoryRegion *mr;
         ram_addr_t addr1;
 
-        mr = qemu_ram_addr_from_host(buffer, &addr1);
+        mr = memory_region_from_host(buffer, &addr1);
         assert(mr != NULL);
         if (is_write) {
             invalidate_and_set_dirty(mr, addr1, access_len);
@@ -3106,10 +3070,7 @@ static inline uint32_t address_space_ldl_internal(AddressSpace *as, hwaddr addr,
 #endif
     } else {
         /* RAM case */
-        ptr = qemu_get_ram_ptr(mr->ram_block,
-                               (memory_region_get_ram_addr(mr)
-                                & TARGET_PAGE_MASK)
-                               + addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         switch (endian) {
         case DEVICE_LITTLE_ENDIAN:
             val = ldl_le_p(ptr);
@@ -3202,10 +3163,7 @@ static inline uint64_t address_space_ldq_internal(AddressSpace *as, hwaddr addr,
 #endif
     } else {
         /* RAM case */
-        ptr = qemu_get_ram_ptr(mr->ram_block,
-                               (memory_region_get_ram_addr(mr)
-                                & TARGET_PAGE_MASK)
-                               + addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         switch (endian) {
         case DEVICE_LITTLE_ENDIAN:
             val = ldq_le_p(ptr);
@@ -3318,10 +3276,7 @@ static inline uint32_t address_space_lduw_internal(AddressSpace *as,
 #endif
     } else {
         /* RAM case */
-        ptr = qemu_get_ram_ptr(mr->ram_block,
-                               (memory_region_get_ram_addr(mr)
-                                & TARGET_PAGE_MASK)
-                               + addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         switch (endian) {
         case DEVICE_LITTLE_ENDIAN:
             val = lduw_le_p(ptr);
@@ -3403,13 +3358,13 @@ void address_space_stl_notdirty(AddressSpace *as, hwaddr addr, uint32_t val,
 
         r = memory_region_dispatch_write(mr, addr1, val, 4, attrs);
     } else {
-        addr1 += memory_region_get_ram_addr(mr) & TARGET_PAGE_MASK;
-        ptr = qemu_get_ram_ptr(mr->ram_block, addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         stl_p(ptr, val);
 
         dirty_log_mask = memory_region_get_dirty_log_mask(mr);
         dirty_log_mask &= ~(1 << DIRTY_MEMORY_CODE);
-        cpu_physical_memory_set_dirty_range(addr1, 4, dirty_log_mask);
+        cpu_physical_memory_set_dirty_range(memory_region_get_ram_addr(mr) + addr,
+                                            4, dirty_log_mask);
         r = MEMTX_OK;
     }
     if (result) {
@@ -3458,8 +3413,7 @@ static inline void address_space_stl_internal(AddressSpace *as,
         r = memory_region_dispatch_write(mr, addr1, val, 4, attrs);
     } else {
         /* RAM case */
-        addr1 += memory_region_get_ram_addr(mr) & TARGET_PAGE_MASK;
-        ptr = qemu_get_ram_ptr(mr->ram_block, addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         switch (endian) {
         case DEVICE_LITTLE_ENDIAN:
             stl_le_p(ptr, val);
@@ -3568,8 +3522,7 @@ static inline void address_space_stw_internal(AddressSpace *as,
         r = memory_region_dispatch_write(mr, addr1, val, 2, attrs);
     } else {
         /* RAM case */
-        addr1 += memory_region_get_ram_addr(mr) & TARGET_PAGE_MASK;
-        ptr = qemu_get_ram_ptr(mr->ram_block, addr1);
+        ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
         switch (endian) {
         case DEVICE_LITTLE_ENDIAN:
             stw_le_p(ptr, val);

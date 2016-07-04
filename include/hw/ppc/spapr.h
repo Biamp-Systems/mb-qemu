@@ -16,6 +16,8 @@ typedef struct sPAPREventLogEntry sPAPREventLogEntry;
 #define HPTE64_V_HPTE_DIRTY     0x0000000000000040ULL
 #define SPAPR_ENTRY_POINT       0x100
 
+#define SPAPR_TIMEBASE_FREQ     512000000ULL
+
 typedef struct sPAPRMachineClass sPAPRMachineClass;
 typedef struct sPAPRMachineState sPAPRMachineState;
 
@@ -36,6 +38,7 @@ struct sPAPRMachineClass {
 
     /*< public >*/
     bool dr_lmb_enabled;       /* enable dynamic-reconfig/hotplug of LMBs */
+    bool dr_cpu_enabled;       /* enable dynamic-reconfig/hotplug of CPUs */
     bool use_ohci_by_default;  /* use USB-OHCI instead of XHCI */
 };
 
@@ -49,7 +52,7 @@ struct sPAPRMachineState {
     struct VIOsPAPRBus *vio_bus;
     QLIST_HEAD(, sPAPRPHBState) phbs;
     struct sPAPRNVRAM *nvram;
-    XICSState *icp;
+    XICSState *xics;
     DeviceState *rtc;
 
     void *htab;
@@ -79,6 +82,7 @@ struct sPAPRMachineState {
     /*< public >*/
     char *kvm_type;
     MemoryHotplugState hotplug_memory;
+    Object **cores;
 };
 
 #define H_SUCCESS         0
@@ -539,10 +543,12 @@ struct sPAPRTCETable {
     uint64_t bus_offset;
     uint32_t page_shift;
     uint64_t *table;
+    uint32_t mig_nb_table;
+    uint64_t *mig_table;
     bool bypass;
     bool need_vfio;
     int fd;
-    MemoryRegion iommu;
+    MemoryRegion root, iommu;
     struct VIOsPAPRDevice *vdev; /* for @bypass migration compatibility only */
     QLIST_ENTRY(sPAPRTCETable) list;
 };
@@ -561,11 +567,11 @@ void spapr_events_fdt_skel(void *fdt, uint32_t epow_irq);
 int spapr_h_cas_compose_response(sPAPRMachineState *sm,
                                  target_ulong addr, target_ulong size,
                                  bool cpu_update, bool memory_update);
-sPAPRTCETable *spapr_tce_new_table(DeviceState *owner, uint32_t liobn,
-                                   uint64_t bus_offset,
-                                   uint32_t page_shift,
-                                   uint32_t nb_table,
-                                   bool need_vfio);
+sPAPRTCETable *spapr_tce_new_table(DeviceState *owner, uint32_t liobn);
+void spapr_tce_table_enable(sPAPRTCETable *tcet,
+                            uint32_t page_shift, uint64_t bus_offset,
+                            uint32_t nb_table);
+void spapr_tce_table_disable(sPAPRTCETable *tcet);
 void spapr_tce_set_need_vfio(sPAPRTCETable *tcet, bool need_vfio);
 
 MemoryRegion *spapr_tce_get_iommu(sPAPRTCETable *tcet);
@@ -580,6 +586,9 @@ void spapr_hotplug_req_add_by_count(sPAPRDRConnectorType drc_type,
                                        uint32_t count);
 void spapr_hotplug_req_remove_by_count(sPAPRDRConnectorType drc_type,
                                           uint32_t count);
+void spapr_cpu_init(sPAPRMachineState *spapr, PowerPCCPU *cpu, Error **errp);
+void *spapr_populate_hotplug_cpu_dt(CPUState *cs, int *fdt_offset,
+                                    sPAPRMachineState *spapr);
 
 /* rtas-configure-connector state */
 struct sPAPRConfigureConnectorState {
@@ -618,9 +627,11 @@ int spapr_rng_populate_dt(void *fdt);
 #define SPAPR_DR_LMB_LIST_ENTRY_SIZE 6
 
 /*
- * This flag value defines the LMB as assigned in ibm,dynamic-memory
- * property under ibm,dynamic-reconfiguration-memory node.
+ * Defines for flag value in ibm,dynamic-memory property under
+ * ibm,dynamic-reconfiguration-memory node.
  */
 #define SPAPR_LMB_FLAGS_ASSIGNED 0x00000008
+#define SPAPR_LMB_FLAGS_DRC_INVALID 0x00000020
+#define SPAPR_LMB_FLAGS_RESERVED 0x00000080
 
 #endif /* !defined (__HW_SPAPR_H__) */

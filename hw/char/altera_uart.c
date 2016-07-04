@@ -21,6 +21,7 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "sysemu/char.h"
+#include "hw/char/serial.h"
 
 #define R_RXDATA        0
 #define R_TXDATA        1
@@ -186,7 +187,9 @@ static int altera_uart_init(SysBusDevice *dev)
                           TYPE_ALTERA_UART, R_MAX * sizeof(uint32_t));
     sysbus_init_mmio(dev, &s->mmio);
 
-    s->chr = qemu_char_get_next_serial();
+    if (!s->chr) {
+        s->chr = serial_hds[0];
+    }
     if (s->chr) {
         qemu_chr_add_handlers(s->chr, uart_can_rx, uart_rx, uart_event, s);
     }
@@ -195,6 +198,7 @@ static int altera_uart_init(SysBusDevice *dev)
 }
 
 static Property altera_uart_properties[] = {
+    DEFINE_PROP_CHR("chardev", AlteraUART, chr),
     DEFINE_PROP_END_OF_LIST(),
 };
 

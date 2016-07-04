@@ -288,11 +288,15 @@ static void labx_nios2_init(MachineState *machine)
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram_alias = g_new(MemoryRegion, 1);
 
-    /* Attach emulated BRAM through the LMB. LMB size is not specified
-       in the device-tree but there must be one to hold the vector table. */
-    memory_region_init_ram(phys_lmb_bram, NULL, "nios2.lmb_bram", LMB_BRAM_SIZE, &error_fatal);
-    vmstate_register_ram_global(phys_lmb_bram);
-    memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
+    if (ddr_base != 0)
+    {
+        /* Attach emulated BRAM through the LMB. LMB size is not specified
+           in the device-tree but there must be one to hold the vector table
+           if the ram doesn't cover that address. */
+        memory_region_init_ram(phys_lmb_bram, NULL, "nios2.lmb_bram", LMB_BRAM_SIZE, &error_fatal);
+        vmstate_register_ram_global(phys_lmb_bram);
+        memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
+    }
 
     memory_region_init_ram(phys_ram, NULL, "nios2.ram", ram_size, &error_fatal);
     vmstate_register_ram_global(phys_ram);

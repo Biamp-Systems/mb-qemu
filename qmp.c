@@ -14,6 +14,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu-version.h"
 #include "qemu/cutils.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
@@ -181,7 +182,7 @@ void qmp_cont(Error **errp)
     Error *local_err = NULL;
     BlockBackend *blk;
     BlockDriverState *bs;
-    BdrvNextIterator *it;
+    BdrvNextIterator it;
 
     /* if there is a dump in background, we should wait until the dump
      * finished */
@@ -201,8 +202,7 @@ void qmp_cont(Error **errp)
         blk_iostatus_reset(blk);
     }
 
-    it = NULL;
-    while ((it = bdrv_next(it, &bs))) {
+    for (bs = bdrv_first(&it); bs; bs = bdrv_next(&it)) {
         bdrv_add_key(bs, NULL, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);

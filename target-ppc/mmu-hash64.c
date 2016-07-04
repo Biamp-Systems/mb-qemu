@@ -99,10 +99,8 @@ void dump_slb(FILE *f, fprintf_function cpu_fprintf, PowerPCCPU *cpu)
 
 void helper_slbia(CPUPPCState *env)
 {
-    PowerPCCPU *cpu = ppc_env_get_cpu(env);
-    int n, do_invalidate;
+    int n;
 
-    do_invalidate = 0;
     /* XXX: Warning: slbia never invalidates the first segment */
     for (n = 1; n < env->slb_nr; n++) {
         ppc_slb_t *slb = &env->slb[n];
@@ -113,11 +111,8 @@ void helper_slbia(CPUPPCState *env)
              *      and we still don't have a tlb_flush_mask(env, n, mask)
              *      in QEMU, we just invalidate all TLBs
              */
-            do_invalidate = 1;
+            env->tlb_need_flush = 1;
         }
-    }
-    if (do_invalidate) {
-        tlb_flush(CPU(cpu), 1);
     }
 }
 
@@ -138,7 +133,7 @@ void helper_slbie(CPUPPCState *env, target_ulong addr)
          *      and we still don't have a tlb_flush_mask(env, n, mask)
          *      in QEMU, we just invalidate all TLBs
          */
-        tlb_flush(CPU(cpu), 1);
+        env->tlb_need_flush = 1;
     }
 }
 
@@ -224,6 +219,24 @@ static int ppc_load_slb_vsid(PowerPCCPU *cpu, target_ulong rb,
     return 0;
 }
 
+static int ppc_find_slb_vsid(PowerPCCPU *cpu, target_ulong rb,
+                             target_ulong *rt)
+{
+    CPUPPCState *env = &cpu->env;
+    ppc_slb_t *slb;
+
+    if (!msr_is_64bit(env, env->msr)) {
+        rb &= 0xffffffff;
+    }
+    slb = slb_lookup(cpu, rb);
+    if (slb == NULL) {
+        *rt = (target_ulong)-1ul;
+    } else {
+        *rt = slb->vsid;
+    }
+    return 0;
+}
+
 void helper_store_slb(CPUPPCState *env, target_ulong rb, target_ulong rs)
 {
     PowerPCCPU *cpu = ppc_env_get_cpu(env);
@@ -240,6 +253,18 @@ target_ulong helper_load_slb_esid(CPUPPCState *env, target_ulong rb)
     target_ulong rt = 0;
 
     if (ppc_load_slb_esid(cpu, rb, &rt) < 0) {
+        helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
+                                   POWERPC_EXCP_INVAL);
+    }
+    return rt;
+}
+
+target_ulong helper_find_slb_vsid(CPUPPCState *env, target_ulong rb)
+{
+    PowerPCCPU *cpu = ppc_env_get_cpu(env);
+    target_ulong rt = 0;
+
+    if (ppc_find_slb_vsid(cpu, rb, &rt) < 0) {
         helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
                                    POWERPC_EXCP_INVAL);
     }
@@ -283,8 +308,6 @@ void ppc_hash64_set_external_hpt(PowerPCCPU *cpu, void *hpt, int shift,
 {
     CPUPPCState *env = &cpu->env;
     Error *local_err = NULL;
-
-    cpu_synchronize_state(CPU(cpu));
 
     if (hpt) {
         env->external_htab = hpt;
@@ -427,9 +450,31 @@ void ppc_hash64_stop_access(PowerPCCPU *cpu, uint64_t token)
     }
 }
 
+/* Returns the effective page shift or 0. MPSS isn't supported yet so
+ * this will always be the slb_pshift or 0
+ */
+static uint32_t ppc_hash64_pte_size_decode(uint64_t pte1, uint32_t slb_pshift)
+{
+    switch (slb_pshift) {
+    case 12:
+        return 12;
+    case 16:
+        if ((pte1 & 0xf000) == 0x1000) {
+            return 16;
+        }
+        return 0;
+    case 24:
+        if ((pte1 & 0xff000) == 0) {
+            return 24;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 static hwaddr ppc_hash64_pteg_search(PowerPCCPU *cpu, hwaddr hash,
-                                     bool secondary, target_ulong ptem,
-                                     ppc_hash_pte64_t *pte)
+                                     uint32_t slb_pshift, bool secondary,
+                                     target_ulong ptem, ppc_hash_pte64_t *pte)
 {
     CPUPPCState *env = &cpu->env;
     int i;
@@ -449,6 +494,13 @@ static hwaddr ppc_hash64_pteg_search(PowerPCCPU *cpu, hwaddr hash,
         if ((pte0 & HPTE64_V_VALID)
             && (secondary == !!(pte0 & HPTE64_V_SECONDARY))
             && HPTE64_V_COMPARE(pte0, ptem)) {
+            uint32_t pshift = ppc_hash64_pte_size_decode(pte1, slb_pshift);
+            if (pshift == 0) {
+                continue;
+            }
+            /* We don't do anything with pshift yet as qemu TLB only deals
+             * with 4K pages anyway
+             */
             pte->pte0 = pte0;
             pte->pte1 = pte1;
             ppc_hash64_stop_access(cpu, token);
@@ -502,7 +554,8 @@ static hwaddr ppc_hash64_htab_lookup(PowerPCCPU *cpu,
             " vsid=" TARGET_FMT_lx " ptem=" TARGET_FMT_lx
             " hash=" TARGET_FMT_plx "\n",
             env->htab_base, env->htab_mask, vsid, ptem,  hash);
-    pte_offset = ppc_hash64_pteg_search(cpu, hash, 0, ptem, pte);
+    pte_offset = ppc_hash64_pteg_search(cpu, hash, slb->sps->page_shift,
+                                        0, ptem, pte);
 
     if (pte_offset == -1) {
         /* Secondary PTEG lookup */
@@ -512,7 +565,8 @@ static hwaddr ppc_hash64_htab_lookup(PowerPCCPU *cpu,
                 " hash=" TARGET_FMT_plx "\n", env->htab_base,
                 env->htab_mask, vsid, ptem, ~hash);
 
-        pte_offset = ppc_hash64_pteg_search(cpu, ~hash, 1, ptem, pte);
+        pte_offset = ppc_hash64_pteg_search(cpu, ~hash, slb->sps->page_shift, 1,
+                                            ptem, pte);
     }
 
     return pte_offset;
@@ -590,6 +644,47 @@ unsigned ppc_hash64_hpte_page_shift_noslb(PowerPCCPU *cpu,
     return 0;
 }
 
+static void ppc_hash64_set_isi(CPUState *cs, CPUPPCState *env,
+                               uint64_t error_code)
+{
+    bool vpm;
+
+    if (msr_ir) {
+        vpm = !!(env->spr[SPR_LPCR] & LPCR_VPM1);
+    } else {
+        vpm = !!(env->spr[SPR_LPCR] & LPCR_VPM0);
+    }
+    if (vpm && !msr_hv) {
+        cs->exception_index = POWERPC_EXCP_HISI;
+    } else {
+        cs->exception_index = POWERPC_EXCP_ISI;
+    }
+    env->error_code = error_code;
+}
+
+static void ppc_hash64_set_dsi(CPUState *cs, CPUPPCState *env, uint64_t dar,
+                               uint64_t dsisr)
+{
+    bool vpm;
+
+    if (msr_dr) {
+        vpm = !!(env->spr[SPR_LPCR] & LPCR_VPM1);
+    } else {
+        vpm = !!(env->spr[SPR_LPCR] & LPCR_VPM0);
+    }
+    if (vpm && !msr_hv) {
+        cs->exception_index = POWERPC_EXCP_HDSI;
+        env->spr[SPR_HDAR] = dar;
+        env->spr[SPR_HDSISR] = dsisr;
+    } else {
+        cs->exception_index = POWERPC_EXCP_DSI;
+        env->spr[SPR_DAR] = dar;
+        env->spr[SPR_DSISR] = dsisr;
+   }
+    env->error_code = 0;
+}
+
+
 int ppc_hash64_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr,
                                 int rwx, int mmu_idx)
 {
@@ -600,7 +695,7 @@ int ppc_hash64_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr,
     hwaddr pte_offset;
     ppc_hash_pte64_t pte;
     int pp_prot, amr_prot, prot;
-    uint64_t new_pte1;
+    uint64_t new_pte1, dsisr;
     const int need_prot[] = {PAGE_READ, PAGE_WRITE, PAGE_EXEC};
     hwaddr raddr;
 
@@ -634,26 +729,21 @@ int ppc_hash64_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr,
 
     /* 3. Check for segment level no-execute violation */
     if ((rwx == 2) && (slb->vsid & SLB_VSID_N)) {
-        cs->exception_index = POWERPC_EXCP_ISI;
-        env->error_code = 0x10000000;
+        ppc_hash64_set_isi(cs, env, 0x10000000);
         return 1;
     }
 
     /* 4. Locate the PTE in the hash table */
     pte_offset = ppc_hash64_htab_lookup(cpu, slb, eaddr, &pte);
     if (pte_offset == -1) {
+        dsisr = 0x40000000;
         if (rwx == 2) {
-            cs->exception_index = POWERPC_EXCP_ISI;
-            env->error_code = 0x40000000;
+            ppc_hash64_set_isi(cs, env, dsisr);
         } else {
-            cs->exception_index = POWERPC_EXCP_DSI;
-            env->error_code = 0;
-            env->spr[SPR_DAR] = eaddr;
             if (rwx == 1) {
-                env->spr[SPR_DSISR] = 0x42000000;
-            } else {
-                env->spr[SPR_DSISR] = 0x40000000;
+                dsisr |= 0x02000000;
             }
+            ppc_hash64_set_dsi(cs, env, eaddr, dsisr);
         }
         return 1;
     }
@@ -682,14 +772,9 @@ int ppc_hash64_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr,
         /* Access right violation */
         qemu_log_mask(CPU_LOG_MMU, "PTE access rejected\n");
         if (rwx == 2) {
-            cs->exception_index = POWERPC_EXCP_ISI;
-            env->error_code = 0x08000000;
+            ppc_hash64_set_isi(cs, env, 0x08000000);
         } else {
-            target_ulong dsisr = 0;
-
-            cs->exception_index = POWERPC_EXCP_DSI;
-            env->error_code = 0;
-            env->spr[SPR_DAR] = eaddr;
+            dsisr = 0;
             if (need_prot[rwx] & ~pp_prot) {
                 dsisr |= 0x08000000;
             }
@@ -699,7 +784,7 @@ int ppc_hash64_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr,
             if (need_prot[rwx] & ~amr_prot) {
                 dsisr |= 0x00200000;
             }
-            env->spr[SPR_DSISR] = dsisr;
+            ppc_hash64_set_dsi(cs, env, eaddr, dsisr);
         }
         return 1;
     }
@@ -796,4 +881,61 @@ void ppc_hash64_tlb_flush_hpte(PowerPCCPU *cpu,
      * mask) in QEMU, we just invalidate all TLBs
      */
     tlb_flush(CPU(cpu), 1);
+}
+
+void helper_store_lpcr(CPUPPCState *env, target_ulong val)
+{
+    uint64_t lpcr = 0;
+
+    /* Filter out bits */
+    switch (env->mmu_model) {
+    case POWERPC_MMU_64B: /* 970 */
+        if (val & 0x40) {
+            lpcr |= LPCR_LPES0;
+        }
+        if (val & 0x8000000000000000ull) {
+            lpcr |= LPCR_LPES1;
+        }
+        if (val & 0x20) {
+            lpcr |= (0x4ull << LPCR_RMLS_SHIFT);
+        }
+        if (val & 0x4000000000000000ull) {
+            lpcr |= (0x2ull << LPCR_RMLS_SHIFT);
+        }
+        if (val & 0x2000000000000000ull) {
+            lpcr |= (0x1ull << LPCR_RMLS_SHIFT);
+        }
+        env->spr[SPR_RMOR] = ((lpcr >> 41) & 0xffffull) << 26;
+
+        /* XXX We could also write LPID from HID4 here
+         * but since we don't tag any translation on it
+         * it doesn't actually matter
+         */
+        /* XXX For proper emulation of 970 we also need
+         * to dig HRMOR out of HID5
+         */
+        break;
+    case POWERPC_MMU_2_03: /* P5p */
+        lpcr = val & (LPCR_RMLS | LPCR_ILE |
+                      LPCR_LPES0 | LPCR_LPES1 |
+                      LPCR_RMI | LPCR_HDICE);
+        break;
+    case POWERPC_MMU_2_06: /* P7 */
+        lpcr = val & (LPCR_VPM0 | LPCR_VPM1 | LPCR_ISL | LPCR_DPFD |
+                      LPCR_VRMASD | LPCR_RMLS | LPCR_ILE |
+                      LPCR_P7_PECE0 | LPCR_P7_PECE1 | LPCR_P7_PECE2 |
+                      LPCR_MER | LPCR_TC |
+                      LPCR_LPES0 | LPCR_LPES1 | LPCR_HDICE);
+        break;
+    case POWERPC_MMU_2_07: /* P8 */
+        lpcr = val & (LPCR_VPM0 | LPCR_VPM1 | LPCR_ISL | LPCR_KBV |
+                      LPCR_DPFD | LPCR_VRMASD | LPCR_RMLS | LPCR_ILE |
+                      LPCR_AIL | LPCR_ONL | LPCR_P8_PECE0 | LPCR_P8_PECE1 |
+                      LPCR_P8_PECE2 | LPCR_P8_PECE3 | LPCR_P8_PECE4 |
+                      LPCR_MER | LPCR_TC | LPCR_LPES0 | LPCR_HDICE);
+        break;
+    default:
+        ;
+    }
+    env->spr[SPR_LPCR] = lpcr;
 }

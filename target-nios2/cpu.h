@@ -209,7 +209,6 @@ static inline Nios2CPU *nios2_env_get_cpu(CPUNios2State *env)
 
 void nios2_tcg_init(void);
 Nios2CPU *cpu_nios2_init(const char *cpu_model);
-int cpu_nios2_exec(CPUState *cs);
 void nios2_cpu_do_interrupt(CPUState *cs);
 int cpu_nios2_signal_handler(int host_signum, void *pinfo, void *puc);
 void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env);
@@ -225,7 +224,6 @@ void nios2_check_interrupts(CPUNios2State *env);
 
 #define cpu_init(cpu_model) CPU(cpu_nios2_init(cpu_model))
 
-#define cpu_exec cpu_nios2_exec
 #define cpu_gen_code cpu_nios2_gen_code
 #define cpu_signal_handler cpu_nios2_signal_handler
 

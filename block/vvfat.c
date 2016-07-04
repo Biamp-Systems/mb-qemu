@@ -114,15 +114,12 @@ static inline int array_ensure_allocated(array_t* array, int index)
 
 static inline void* array_get_next(array_t* array) {
     unsigned int next = array->next;
-    void* result;
 
     if (array_ensure_allocated(array, next) < 0)
 	return NULL;
 
     array->next = next + 1;
-    result = array_get(array, next);
-
-    return result;
+    return array_get(array, next);
 }
 
 static inline void* array_insert(array_t* array,unsigned int index,unsigned int count) {
@@ -1960,8 +1957,7 @@ DLOG(fprintf(stderr, "check direntry %d:\n", i); print_direntry(direntries + i))
 		/* check file size with FAT */
 		cluster_count = get_cluster_count_for_direntry(s, direntries + i, path2);
 		if (cluster_count !=
-			(le32_to_cpu(direntries[i].size) + s->cluster_size
-			 - 1) / s->cluster_size) {
+            DIV_ROUND_UP(le32_to_cpu(direntries[i].size), s->cluster_size)) {
 		    DLOG(fprintf(stderr, "Cluster count mismatch\n"));
 		    goto fail;
 		}
@@ -2998,12 +2994,12 @@ static int enable_write_target(BDRVVVFATState *s, Error **errp)
         goto err;
     }
 
-    s->qcow = NULL;
     options = qdict_new();
     qdict_put(options, "driver", qstring_from_str("qcow"));
-    ret = bdrv_open(&s->qcow, s->qcow_filename, NULL, options,
-                    BDRV_O_RDWR | BDRV_O_NO_FLUSH, errp);
-    if (ret < 0) {
+    s->qcow = bdrv_open(s->qcow_filename, NULL, options,
+                        BDRV_O_RDWR | BDRV_O_NO_FLUSH, errp);
+    if (!s->qcow) {
+        ret = -EINVAL;
         goto err;
     }
 

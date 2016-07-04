@@ -5,11 +5,13 @@
 #include "net/net.h"
 
 static inline DeviceState *milkymist_uart_create(hwaddr base,
-        qemu_irq irq)
+                                                 qemu_irq irq,
+                                                 CharDriverState *chr)
 {
     DeviceState *dev;
 
     dev = qdev_create(NULL, "milkymist-uart");
+    qdev_prop_set_chr(dev, "chardev", chr);
     qdev_init_nofail(dev);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
@@ -107,10 +109,6 @@ static inline DeviceState *milkymist_tmu2_create(hwaddr base,
     GLXFBConfig *configs;
     int nelements;
     int ver_major, ver_minor;
-
-    if (display_type == DT_NOGRAPHIC) {
-        return NULL;
-    }
 
     /* check that GLX will work */
     d = XOpenDisplay(NULL);

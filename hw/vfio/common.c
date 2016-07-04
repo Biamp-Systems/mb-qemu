@@ -20,7 +20,6 @@
 
 #include "qemu/osdep.h"
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <linux/vfio.h>
 
 #include "hw/vfio/vfio-common.h"
@@ -260,14 +259,20 @@ static void vfio_iommu_map_notify(Notifier *n, void *data)
     VFIOGuestIOMMU *giommu = container_of(n, VFIOGuestIOMMU, n);
     VFIOContainer *container = giommu->container;
     IOMMUTLBEntry *iotlb = data;
+    hwaddr iova = iotlb->iova + giommu->iommu_offset;
     MemoryRegion *mr;
     hwaddr xlat;
     hwaddr len = iotlb->addr_mask + 1;
     void *vaddr;
     int ret;
 
-    trace_vfio_iommu_map_notify(iotlb->iova,
-                                iotlb->iova + iotlb->addr_mask);
+    trace_vfio_iommu_map_notify(iova, iova + iotlb->addr_mask);
+
+    if (iotlb->target_as != &address_space_memory) {
+        error_report("Wrong target AS \"%s\", only system memory is allowed",
+                     iotlb->target_as->name ? iotlb->target_as->name : "none");
+        return;
+    }
 
     /*
      * The IOMMU TLB entry we have just covers translation through
@@ -294,31 +299,26 @@ static void vfio_iommu_map_notify(Notifier *n, void *data)
 
     if ((iotlb->perm & IOMMU_RW) != IOMMU_NONE) {
         vaddr = memory_region_get_ram_ptr(mr) + xlat;
-        ret = vfio_dma_map(container, iotlb->iova,
+        ret = vfio_dma_map(container, iova,
                            iotlb->addr_mask + 1, vaddr,
                            !(iotlb->perm & IOMMU_WO) || mr->readonly);
         if (ret) {
             error_report("vfio_dma_map(%p, 0x%"HWADDR_PRIx", "
                          "0x%"HWADDR_PRIx", %p) = %d (%m)",
-                         container, iotlb->iova,
+                         container, iova,
                          iotlb->addr_mask + 1, vaddr, ret);
         }
     } else {
-        ret = vfio_dma_unmap(container, iotlb->iova, iotlb->addr_mask + 1);
+        ret = vfio_dma_unmap(container, iova, iotlb->addr_mask + 1);
         if (ret) {
             error_report("vfio_dma_unmap(%p, 0x%"HWADDR_PRIx", "
                          "0x%"HWADDR_PRIx") = %d (%m)",
-                         container, iotlb->iova,
+                         container, iova,
                          iotlb->addr_mask + 1, ret);
         }
     }
 out:
     rcu_read_unlock();
-}
-
-static hwaddr vfio_container_granularity(VFIOContainer *container)
-{
-    return (hwaddr)1 << ctz64(container->iova_pgsizes);
 }
 
 static void vfio_listener_region_add(MemoryListener *listener,
@@ -380,14 +380,14 @@ static void vfio_listener_region_add(MemoryListener *listener,
          */
         giommu = g_malloc0(sizeof(*giommu));
         giommu->iommu = section->mr;
+        giommu->iommu_offset = section->offset_within_address_space -
+                               section->offset_within_region;
         giommu->container = container;
         giommu->n.notify = vfio_iommu_map_notify;
         QLIST_INSERT_HEAD(&container->giommu_list, giommu, giommu_next);
 
         memory_region_register_iommu_notifier(giommu->iommu, &giommu->n);
-        memory_region_iommu_replay(giommu->iommu, &giommu->n,
-                                   vfio_container_granularity(container),
-                                   false);
+        memory_region_iommu_replay(giommu->iommu, &giommu->n, false);
 
         return;
     }
@@ -433,6 +433,7 @@ static void vfio_listener_region_del(MemoryListener *listener,
 {
     VFIOContainer *container = container_of(listener, VFIOContainer, listener);
     hwaddr iova, end;
+    Int128 llend, llsize;
     int ret;
 
     if (vfio_listener_skipped_section(section)) {
@@ -454,7 +455,8 @@ static void vfio_listener_region_del(MemoryListener *listener,
 
         QLIST_FOREACH(giommu, &container->giommu_list, giommu_next) {
             if (giommu->iommu == section->mr) {
-                memory_region_unregister_iommu_notifier(&giommu->n);
+                memory_region_unregister_iommu_notifier(giommu->iommu,
+                                                        &giommu->n);
                 QLIST_REMOVE(giommu, giommu_next);
                 g_free(giommu);
                 break;
@@ -471,21 +473,25 @@ static void vfio_listener_region_del(MemoryListener *listener,
     }
 
     iova = TARGET_PAGE_ALIGN(section->offset_within_address_space);
-    end = (section->offset_within_address_space + int128_get64(section->size)) &
-          TARGET_PAGE_MASK;
+    llend = int128_make64(section->offset_within_address_space);
+    llend = int128_add(llend, section->size);
+    llend = int128_and(llend, int128_exts64(TARGET_PAGE_MASK));
 
-    if (iova >= end) {
+    if (int128_ge(int128_make64(iova), llend)) {
         return;
     }
+    end = int128_get64(int128_sub(llend, int128_one()));
 
-    trace_vfio_listener_region_del(iova, end - 1);
+    llsize = int128_sub(llend, int128_make64(iova));
 
-    ret = vfio_dma_unmap(container, iova, end - iova);
+    trace_vfio_listener_region_del(iova, end);
+
+    ret = vfio_dma_unmap(container, iova, int128_get64(llsize));
     memory_region_unref(section->mr);
     if (ret) {
         error_report("vfio_dma_unmap(%p, 0x%"HWADDR_PRIx", "
                      "0x%"HWADDR_PRIx") = %d (%m)",
-                     container, iova, end - iova, ret);
+                     container, iova, int128_get64(llsize), ret);
     }
 }
 
@@ -497,6 +503,54 @@ static const MemoryListener vfio_memory_listener = {
 static void vfio_listener_release(VFIOContainer *container)
 {
     memory_listener_unregister(&container->listener);
+}
+
+static struct vfio_info_cap_header *
+vfio_get_region_info_cap(struct vfio_region_info *info, uint16_t id)
+{
+    struct vfio_info_cap_header *hdr;
+    void *ptr = info;
+
+    if (!(info->flags & VFIO_REGION_INFO_FLAG_CAPS)) {
+        return NULL;
+    }
+
+    for (hdr = ptr + info->cap_offset; hdr != ptr; hdr = ptr + hdr->next) {
+        if (hdr->id == id) {
+            return hdr;
+        }
+    }
+
+    return NULL;
+}
+
+static void vfio_setup_region_sparse_mmaps(VFIORegion *region,
+                                           struct vfio_region_info *info)
+{
+    struct vfio_info_cap_header *hdr;
+    struct vfio_region_info_cap_sparse_mmap *sparse;
+    int i;
+
+    hdr = vfio_get_region_info_cap(info, VFIO_REGION_INFO_CAP_SPARSE_MMAP);
+    if (!hdr) {
+        return;
+    }
+
+    sparse = container_of(hdr, struct vfio_region_info_cap_sparse_mmap, header);
+
+    trace_vfio_region_sparse_mmap_header(region->vbasedev->name,
+                                         region->nr, sparse->nr_areas);
+
+    region->nr_mmaps = sparse->nr_areas;
+    region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
+
+    for (i = 0; i < region->nr_mmaps; i++) {
+        region->mmaps[i].offset = sparse->areas[i].offset;
+        region->mmaps[i].size = sparse->areas[i].size;
+        trace_vfio_region_sparse_mmap_entry(i, region->mmaps[i].offset,
+                                            region->mmaps[i].offset +
+                                            region->mmaps[i].size);
+    }
 }
 
 int vfio_region_setup(Object *obj, VFIODevice *vbasedev, VFIORegion *region,
@@ -525,11 +579,14 @@ int vfio_region_setup(Object *obj, VFIODevice *vbasedev, VFIORegion *region,
             region->flags & VFIO_REGION_INFO_FLAG_MMAP &&
             !(region->size & ~qemu_real_host_page_mask)) {
 
-            region->nr_mmaps = 1;
-            region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
+            vfio_setup_region_sparse_mmaps(region, info);
 
-            region->mmaps[0].offset = 0;
-            region->mmaps[0].size = region->size;
+            if (!region->nr_mmaps) {
+                region->nr_mmaps = 1;
+                region->mmaps = g_new0(VFIOMmap, region->nr_mmaps);
+                region->mmaps[0].offset = 0;
+                region->mmaps[0].size = region->size;
+            }
         }
     }
 
@@ -935,7 +992,7 @@ static void vfio_disconnect_container(VFIOGroup *group)
         QLIST_REMOVE(container, next);
 
         QLIST_FOREACH_SAFE(giommu, &container->giommu_list, giommu_next, tmp) {
-            memory_region_unregister_iommu_notifier(&giommu->n);
+            memory_region_unregister_iommu_notifier(giommu->iommu, &giommu->n);
             QLIST_REMOVE(giommu, giommu_next);
             g_free(giommu);
         }
@@ -1089,14 +1146,58 @@ int vfio_get_region_info(VFIODevice *vbasedev, int index,
     *info = g_malloc0(argsz);
 
     (*info)->index = index;
+retry:
     (*info)->argsz = argsz;
 
     if (ioctl(vbasedev->fd, VFIO_DEVICE_GET_REGION_INFO, *info)) {
         g_free(*info);
+        *info = NULL;
         return -errno;
     }
 
+    if ((*info)->argsz > argsz) {
+        argsz = (*info)->argsz;
+        *info = g_realloc(*info, argsz);
+
+        goto retry;
+    }
+
     return 0;
+}
+
+int vfio_get_dev_region_info(VFIODevice *vbasedev, uint32_t type,
+                             uint32_t subtype, struct vfio_region_info **info)
+{
+    int i;
+
+    for (i = 0; i < vbasedev->num_regions; i++) {
+        struct vfio_info_cap_header *hdr;
+        struct vfio_region_info_cap_type *cap_type;
+
+        if (vfio_get_region_info(vbasedev, i, info)) {
+            continue;
+        }
+
+        hdr = vfio_get_region_info_cap(*info, VFIO_REGION_INFO_CAP_TYPE);
+        if (!hdr) {
+            g_free(*info);
+            continue;
+        }
+
+        cap_type = container_of(hdr, struct vfio_region_info_cap_type, header);
+
+        trace_vfio_get_dev_region(vbasedev->name, i,
+                                  cap_type->type, cap_type->subtype);
+
+        if (cap_type->type == type && cap_type->subtype == subtype) {
+            return 0;
+        }
+
+        g_free(*info);
+    }
+
+    *info = NULL;
+    return -ENODEV;
 }
 
 /*
@@ -1150,7 +1251,7 @@ static int vfio_eeh_container_op(VFIOContainer *container, uint32_t op)
         return -errno;
     }
 
-    return 0;
+    return ret;
 }
 
 static VFIOContainer *vfio_eeh_as_container(AddressSpace *as)

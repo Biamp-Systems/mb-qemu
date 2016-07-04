@@ -397,7 +397,7 @@ static void patch_instruction(VAPICROMState *s, X86CPU *cpu, target_ulong ip)
     CPUX86State *env = &cpu->env;
     VAPICHandlers *handlers;
     uint8_t opcode[2];
-    uint32_t imm32;
+    uint32_t imm32 = 0;
     target_ulong current_pc = 0;
     target_ulong current_cs_base = 0;
     uint32_t current_flags = 0;
@@ -450,7 +450,7 @@ static void patch_instruction(VAPICROMState *s, X86CPU *cpu, target_ulong ip)
 
     if (!kvm_enabled()) {
         tb_gen_code(cs, current_pc, current_cs_base, current_flags, 1);
-        cpu_resume_from_signal(cs, NULL);
+        cpu_loop_exit_noexc(cs);
     }
 }
 

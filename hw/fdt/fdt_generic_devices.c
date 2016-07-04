@@ -79,8 +79,9 @@ static int uart16550_fdt_init(char *node_path, FDTMachineInfo *fdti,
            TARGET_FMT_plx ", irq: %s, baud %d\n", base, irq_info, baudrate);
 
     /* it_shift = 2, reg-shift in DTS - for Xilnx IP is hardcoded */
+    /* FIXME: only uses serial zero for now */
     (void) serial_mm_init(address_space_mem, base, 2, irqline, baudrate,
-                            qemu_char_get_next_serial(), DEVICE_LITTLE_ENDIAN);
+                            serial_hds[0], DEVICE_LITTLE_ENDIAN);
     return 0;
 }
 
