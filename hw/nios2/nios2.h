@@ -22,6 +22,7 @@
 #define _NIOS2_H_INCLUDED_
 
 #include "hw/sysbus.h"
+#include "cpu.h"
 
 qemu_irq *nios2_pic_init_cpu(Nios2CPU *cpu);
 
@@ -33,18 +34,6 @@ altera_vic_create(hwaddr base, qemu_irq irq, int kind_of_intr)
     dev = qdev_create(NULL, "altera,vic");
     qdev_init_nofail(dev);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
-    return dev;
-}
-
-static inline DeviceState *
-altera_iic_create(Nios2CPU *cpu, qemu_irq irq, int kind_of_intr)
-{
-    DeviceState *dev;
-
-    dev = qdev_create(NULL, "altera,iic");
-    qdev_prop_set_ptr(dev, "cpu", cpu);
-    qdev_init_nofail(dev);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
     return dev;
 }

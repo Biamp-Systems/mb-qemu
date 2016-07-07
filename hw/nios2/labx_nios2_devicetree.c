@@ -37,6 +37,7 @@
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
 #include "qapi/error.h"
+#include "hw/nios2/nios2_iic.h"
 
 #include "hw/fdt/fdt_generic.h"
 #include "hw/fdt/fdt_generic_devices.h"
@@ -163,7 +164,8 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
 #else
     /* Internal interrupt controller (IIC) */
     fdti->irq_base = qdev_get_gpio_in(DEVICE(cpu), NIOS2_CPU_IRQ);
-    dev = altera_iic_create(cpu, fdti->irq_base, 2);
+    dev = altera_pic_init(cpu, fdti->irq_base);
+    cpu->env.pic_state = dev;
 #endif
 
     /* TODO: use the entrypoint of the passed in elf file or
@@ -255,7 +257,6 @@ static void labx_nios2_init(MachineState *machine)
 {
     MemoryRegion *address_space_mem = get_system_memory();
 
-    int kernel_size;
     int fdt_size;
     void *fdt = get_device_tree(&fdt_size);
     hwaddr ddr_base = get_dram_base(fdt);
