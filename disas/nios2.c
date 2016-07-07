@@ -1,33 +1,35 @@
-/*
- * This file is a concatenation of the following files from binutils:
- *   include/opcode/nios2.h
- *   include/opcode/nios2r1.h
- *   include/opcode/nios2r2.h
- *   opcodes/nios2-opc.c
- *   opcodes/nios2-dis.c
- */
-
-/* Nios II opcode list for GAS, the GNU assembler.
+/* Nios II opcode library for QEMU.
    Copyright (C) 2012-2016 Free Software Foundation, Inc.
    Contributed by Nigel Gray (ngray@altera.com).
    Contributed by Mentor Graphics, Inc.
 
-   This file is part of GAS, the GNU Assembler, and GDB, the GNU disassembler.
+   This program is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation; either version 2
+   of the License, or (at your option) any later version.
 
-   GAS/GDB is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 3, or (at your option)
-   any later version.
-
-   GAS/GDB is distributed in the hope that it will be useful,
+   This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with GAS or GDB; see the file COPYING3.  If not, write to
-   the Free Software Foundation, 51 Franklin Street - Fifth Floor,
-   Boston, MA 02110-1301, USA.  */
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street, Fifth Floor,
+   Boston, MA  02110-1301, USA.  */
+
+/* This file resembles a concatenation of the following files from
+   binutils:
+
+   include/opcode/nios2.h
+   include/opcode/nios2r1.h
+   include/opcode/nios2r2.h
+   opcodes/nios2-opc.c
+   opcodes/nios2-dis.c
+
+   It has been derived from the original patches which have been
+   relicensed by the contributors as GPL version 2 for inclusion
+   in QEMU.  */
 
 #ifndef _NIOS2_H_
 #define _NIOS2_H_
@@ -36,9 +38,6 @@
 #include "qemu/osdep.h"
 #include "disas/bfd.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /****************************************************************************
  * This file contains structures, bit masks and shift counts used
@@ -203,26 +202,6 @@ struct nios2_reg
 
 /* Pull in the instruction field accessors, opcodes, and masks.  */
 /*#include "nios2r1.h"*/
-/* Nios II R1 opcode list for GAS, the GNU assembler.
-   Copyright (C) 2013-2016 Free Software Foundation, Inc.
-   Contributed by Mentor Graphics, Inc.
-
-   This file is part of GAS, the GNU Assembler, and GDB, the GNU disassembler.
-
-   GAS/GDB is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 3, or (at your option)
-   any later version.
-
-   GAS/GDB is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with GAS or GDB; see the file COPYING3.  If not, write to
-   the Free Software Foundation, 51 Franklin Street - Fifth Floor,
-   Boston, MA 02110-1301, USA.  */
 
 #ifndef _NIOS2R1_H_
 #define _NIOS2R1_H_
@@ -677,27 +656,8 @@ struct nios2_reg
 #define MASK_R1_XORI	MASK_R1_OP
 
 #endif /* _NIOS2R1_H */
+
 /*#include "nios2r2.h"*/
-/* Nios II R2 opcode list for GAS, the GNU assembler.
-   Copyright (C) 2013-2016 Free Software Foundation, Inc.
-   Contributed by Mentor Graphics, Inc.
-
-   This file is part of GAS, the GNU Assembler, and GDB, the GNU disassembler.
-
-   GAS/GDB is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 3, or (at your option)
-   any later version.
-
-   GAS/GDB is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with GAS or GDB; see the file COPYING3.  If not, write to
-   the Free Software Foundation, 51 Franklin Street - Fifth Floor,
-   Boston, MA 02110-1301, USA.  */
 
 #ifndef _NIOS2R2_H_
 #define _NIOS2R2_H_
@@ -1793,34 +1753,9 @@ extern const int nios2_num_r2_reg3_mappings;
 extern unsigned long nios2_r2_reg_range_mappings[];
 extern const int nios2_num_r2_reg_range_mappings;
 
-#ifdef __cplusplus
-}
-#endif
-
 #endif /* _NIOS2_H */
-/* Altera Nios II opcode list.
-   Copyright (C) 2012-2016 Free Software Foundation, Inc.
-   Contributed by Nigel Gray (ngray@altera.com).
-   Contributed by Mentor Graphics, Inc.
 
-   This file is part of the GNU opcodes library.
-
-   This library is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 3, or (at your option)
-   any later version.
-
-   It is distributed in the hope that it will be useful, but WITHOUT
-   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-   or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
-   License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the
-   Free Software Foundation, 51 Franklin Street - Fifth Floor, Boston,
-   MA 02110-1301, USA.  */
-/*
-#include "sysdep.h"
+/*#include "sysdep.h"
 #include <stdio.h>
 #include "opcode/nios2.h"
 */
@@ -2581,29 +2516,8 @@ unsigned long nios2_r2_reg_range_mappings[] = {
   0x00ff0000
 };
 const int nios2_num_r2_reg_range_mappings = 8;
-/* Altera Nios II disassemble routines
-   Copyright (C) 2012-2016 Free Software Foundation, Inc.
-   Contributed by Nigel Gray (ngray@altera.com).
-   Contributed by Mentor Graphics, Inc.
 
-   This file is part of the GNU opcodes library.
-
-   This library is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 3, or (at your option)
-   any later version.
-
-   It is distributed in the hope that it will be useful, but WITHOUT
-   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-   or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
-   License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this file; see the file COPYING.  If not, write to the
-   Free Software Foundation, 51 Franklin Street - Fifth Floor, Boston,
-   MA 02110-1301, USA.  */
-/*
-#include "sysdep.h"
+/*#include "sysdep.h"
 #include "dis-asm.h"
 #include "opcode/nios2.h"
 #include "libiberty.h"

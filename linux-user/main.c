@@ -2738,64 +2738,6 @@ void cpu_loop(CPUNios2State *env)
         gdbsig = 0;
 
         switch (trapnr) {
-#if 0 /* FIXME FIXME FIXME */
-        case EXCP_RESET:
-            qemu_log_mask(CPU_LOG_INT, "\nReset request, exit, pc is %#x\n", env->regs[R_PC]);
-            exit(EXIT_FAILURE);
-            break;
-        case EXCP_BUSERR:
-            qemu_log_mask(CPU_LOG_INT, "\nBus error, exit, pc is %#x\n", env->regs[R_PC]);
-            gdbsig = TARGET_SIGBUS;
-            break;
-        case EXCP_DPF:
-        case EXCP_IPF:
-            cpu_dump_state(cs, stderr, fprintf, 0);
-            gdbsig = TARGET_SIGSEGV;
-            break;
-        case EXCP_TICK:
-            qemu_log_mask(CPU_LOG_INT, "\nTick time interrupt pc is %#x\n", env->regs[R_PC]);
-            break;
-        case EXCP_ALIGN:
-            qemu_log_mask(CPU_LOG_INT, "\nAlignment pc is %#x\n", env->regs[R_PC]);
-            gdbsig = TARGET_SIGBUS;
-            break;
-        case EXCP_ILLEGAL:
-            qemu_log_mask(CPU_LOG_INT, "\nIllegal instructionpc is %#x\n", env->regs[R_PC]);
-            gdbsig = TARGET_SIGILL;
-            break;
-        case EXCP_INT:
-            qemu_log_mask(CPU_LOG_INT, "\nExternal interruptpc is %#x\n", env->regs[R_PC]);
-            break;
-        case EXCP_DTLBMISS:
-        case EXCP_ITLBMISS:
-            qemu_log_mask(CPU_LOG_INT, "\nTLB miss\n");
-            break;
-        case EXCP_RANGE:
-            qemu_log_mask(CPU_LOG_INT, "\nRange\n");
-            gdbsig = TARGET_SIGSEGV;
-            break;
-        case EXCP_SYSCALL:
-            env->pc += 4;   /* 0xc00; */
-            env->gpr[11] = do_syscall(env,
-                                      env->gpr[11], /* return value       */
-                                      env->gpr[3],  /* r3 - r7 are params */
-                                      env->gpr[4],
-                                      env->gpr[5],
-                                      env->gpr[6],
-                                      env->gpr[7],
-                                      env->gpr[8], 0, 0);
-            break;
-        case EXCP_FPE:
-            qemu_log_mask(CPU_LOG_INT, "\nFloating point error\n");
-            break;
-        case EXCP_TRAP:
-            qemu_log_mask(CPU_LOG_INT, "\nTrap\n");
-            gdbsig = TARGET_SIGTRAP;
-            break;
-        case EXCP_NR:
-            qemu_log_mask(CPU_LOG_INT, "\nNR\n");
-            break;
-#endif
         case EXCP_INTERRUPT:
             /* just indicate that signals should be handled asap */
             break;
@@ -2809,7 +2751,7 @@ void cpu_loop(CPUNios2State *env)
                                  env->regs[7], env->regs[8], env->regs[9],
                                  0, 0);
 
-		if (env->regs[2] == 0)	/* FIXME FIXME FIXME ... syscall 0 hack */
+		if (env->regs[2] == 0)	/* FIXME: syscall 0 workaround */
 			ret = 0;
 
                 env->regs[2] = abs(ret);
@@ -2833,7 +2775,7 @@ void cpu_loop(CPUNios2State *env)
             }
         case 0xaa:
             switch (env->regs[R_PC]) {
-//              case 0x1000:	/* __kuser_helper_version */
+                //case 0x1000:	/* __kuser_helper_version */
 		case 0x1004:	/* __kuser_cmpxchg */
                     start_exclusive();
 		    if (env->regs[4] & 0x3)
@@ -2850,7 +2792,7 @@ void cpu_loop(CPUNios2State *env)
                     end_exclusive();
                     env->regs[R_PC] = env->regs[R_RA];
                     break;
-//		case 0x1040:	/* __kuser_sigtramp */
+                    //case 0x1040:	/* __kuser_sigtramp */
 kuser_fail:
                 default:
                     info.si_signo = TARGET_SIGSEGV;
