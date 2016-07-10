@@ -39,21 +39,6 @@ static bool nios2_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
-#ifndef CONFIG_USER_ONLY
-static void nios2_cpu_set_irq(void *opaque, int irq, int level)
-{
-    Nios2CPU *cpu = opaque;
-    CPUState *cs = CPU(cpu);
-    int type = irq ? CPU_INTERRUPT_NMI : CPU_INTERRUPT_HARD;
-
-    if (level) {
-        cpu_interrupt(cs, type);
-    } else {
-        cpu_reset_interrupt(cs, type);
-    }
-}
-#endif
-
 /* CPUClass::reset() */
 static void nios2_cpu_reset(CPUState *cs)
 {
@@ -91,9 +76,6 @@ static void nios2_cpu_initfn(Object *obj)
     cpu_exec_init(cs, &error_abort);
 
 #if !defined(CONFIG_USER_ONLY)
-    /* Inbound IRQ line */
-    qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 1);
-
     mmu_init(&env->mmu);
 #endif
 

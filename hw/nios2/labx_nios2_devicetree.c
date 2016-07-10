@@ -135,8 +135,6 @@ static Nios2CPU *cpu0 = NULL;
 
 static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offset)
 {
-    //int i;
-    DeviceState *dev;
     Error *errp = NULL;
 
     Nios2CPU *cpu = cpu_nios2_init("nios2");
@@ -149,6 +147,7 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
 
 #if 0 /* TODO: Finish off the vectored-interrupt-controller */
     int reglen;
+    DeviceState *dev;
     const void *reg = qemu_fdt_getprop_offset(fdt, node, "reg", &reglen);
     uint32_t irq_addr = qemu_fdt_int_array_index(reg, 0) + offset;
     int nrIrqLen;
@@ -163,9 +162,8 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
     dev = altera_vic_create(irq_addr, fdti->irq_base, 2);
 #else
     /* Internal interrupt controller (IIC) */
-    fdti->irq_base = qdev_get_gpio_in(DEVICE(cpu), NIOS2_CPU_IRQ);
-    dev = altera_pic_init(cpu, fdti->irq_base);
-    cpu->env.pic_state = dev;
+    nios2_iic_create(cpu);
+    fdti->irq_base = qdev_get_gpio_in(cpu->env.pic_state, 0);
 #endif
 
     /* TODO: use the entrypoint of the passed in elf file or
@@ -185,7 +183,7 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
     /* reset again to use the new reset vector */
     cpu_reset(CPU(cpu));
 
-    fdt_init_set_opaque(fdti, node_path, dev);
+    fdt_init_set_opaque(fdti, node_path, cpu->env.pic_state);
 }
 
 DevInfo cpu_device = {

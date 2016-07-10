@@ -68,9 +68,6 @@ typedef struct Nios2CPUClass {
 #define EXCEPTION_ADDRESS     0x00000004
 #define FAST_TLB_MISS_ADDRESS 0x00000008
 
-/* Main interrupt line */
-#define NIOS2_CPU_IRQ 0
-
 /* GP regs + CR regs + PC */
 #define NUM_CORE_REGS (32 + 32 + 1)
 

@@ -115,7 +115,7 @@ static void cpu_irq_handler(void *opaque, int irq, int level)
     }
 }
 
-DeviceState *altera_pic_init(Nios2CPU *cpu, qemu_irq cpu_irq)
+static inline DeviceState *altera_pic_init(Nios2CPU *cpu, qemu_irq cpu_irq)
 {
     DeviceState *dev;
     SysBusDevice *d;
