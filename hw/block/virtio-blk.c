@@ -798,7 +798,7 @@ static void virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
     }
 }
 
-static void virtio_blk_save(QEMUFile *f, void *opaque)
+static void virtio_blk_save(QEMUFile *f, void *opaque, size_t size)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(opaque);
 
@@ -823,15 +823,12 @@ static void virtio_blk_save_device(VirtIODevice *vdev, QEMUFile *f)
     qemu_put_sbyte(f, 0);
 }
 
-static int virtio_blk_load(QEMUFile *f, void *opaque, int version_id)
+static int virtio_blk_load(QEMUFile *f, void *opaque, size_t size)
 {
     VirtIOBlock *s = opaque;
     VirtIODevice *vdev = VIRTIO_DEVICE(s);
 
-    if (version_id != 2)
-        return -EINVAL;
-
-    return virtio_load(vdev, f, version_id);
+    return virtio_load(vdev, f, 2);
 }
 
 static int virtio_blk_load_device(VirtIODevice *vdev, QEMUFile *f,
@@ -880,7 +877,6 @@ static void virtio_blk_device_realize(DeviceState *dev, Error **errp)
     VirtIOBlock *s = VIRTIO_BLK(dev);
     VirtIOBlkConf *conf = &s->conf;
     Error *err = NULL;
-    static int virtio_blk_id;
     unsigned i;
 
     if (!conf->conf.blk) {
@@ -897,6 +893,7 @@ static void virtio_blk_device_realize(DeviceState *dev, Error **errp)
     }
 
     blkconf_serial(&conf->conf, &conf->serial);
+    blkconf_apply_backend_options(&conf->conf);
     s->original_wce = blk_enable_write_cache(conf->conf.blk);
     blkconf_geometry(&conf->conf, NULL, 65535, 255, 255, &err);
     if (err) {
@@ -913,7 +910,7 @@ static void virtio_blk_device_realize(DeviceState *dev, Error **errp)
     s->sector_mask = (s->conf.conf.logical_block_size / BDRV_SECTOR_SIZE) - 1;
 
     for (i = 0; i < conf->num_queues; i++) {
-        virtio_add_queue(vdev, 128, virtio_blk_handle_output);
+        virtio_add_queue_aio(vdev, 128, virtio_blk_handle_output);
     }
     virtio_blk_data_plane_create(vdev, conf, &s->dataplane, &err);
     if (err != NULL) {
@@ -923,8 +920,6 @@ static void virtio_blk_device_realize(DeviceState *dev, Error **errp)
     }
 
     s->change = qemu_add_vm_change_state_handler(virtio_blk_dma_restart_cb, s);
-    register_savevm(dev, "virtio-blk", virtio_blk_id++, 2,
-                    virtio_blk_save, virtio_blk_load, s);
     blk_set_dev_ops(s->blk, &virtio_block_ops, s);
     blk_set_guest_block_size(s->blk, s->conf.conf.logical_block_size);
 
@@ -939,7 +934,6 @@ static void virtio_blk_device_unrealize(DeviceState *dev, Error **errp)
     virtio_blk_data_plane_destroy(s->dataplane);
     s->dataplane = NULL;
     qemu_del_vm_change_state_handler(s->change);
-    unregister_savevm(dev, "virtio-blk", s);
     blockdev_mark_auto_del(s->blk);
     virtio_cleanup(vdev);
 }
@@ -957,8 +951,11 @@ static void virtio_blk_instance_init(Object *obj)
                                   DEVICE(obj), NULL);
 }
 
+VMSTATE_VIRTIO_DEVICE(blk, 2, virtio_blk_load, virtio_blk_save);
+
 static Property virtio_blk_properties[] = {
     DEFINE_BLOCK_PROPERTIES(VirtIOBlock, conf.conf),
+    DEFINE_BLOCK_ERROR_PROPERTIES(VirtIOBlock, conf.conf),
     DEFINE_BLOCK_CHS_PROPERTIES(VirtIOBlock, conf.conf),
     DEFINE_PROP_STRING("serial", VirtIOBlock, conf.serial),
     DEFINE_PROP_BIT("config-wce", VirtIOBlock, conf.config_wce, 0, true),
@@ -977,6 +974,7 @@ static void virtio_blk_class_init(ObjectClass *klass, void *data)
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
 
     dc->props = virtio_blk_properties;
+    dc->vmsd = &vmstate_virtio_blk;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
     vdc->realize = virtio_blk_device_realize;
     vdc->unrealize = virtio_blk_device_unrealize;

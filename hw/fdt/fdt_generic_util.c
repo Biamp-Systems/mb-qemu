@@ -164,7 +164,7 @@ int simple_bus_fdt_init(char *bus_node_path, FDTMachineInfo *fdti, void *unused)
         init_args->node_path = children[i];
         init_args->fdti = fdti;
         fdti->routinesPending++;
-        qemu_coroutine_enter(qemu_coroutine_create(fdt_init_node), init_args);
+        qemu_coroutine_enter(qemu_coroutine_create(fdt_init_node, init_args));
     }
 
     if (fdti->routinesPending != initialRoutinesPending) {

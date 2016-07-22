@@ -149,6 +149,7 @@ typedef struct FlashPartInfo {
 */
 
 #define SPANSION_CONTINUOUS_READ_MODE_CMD_LEN 1
+#define WINBOND_CONTINUOUS_READ_MODE_CMD_LEN 1
 
 static const FlashPartInfo known_devices[] = {
     /* Atmel -- some are (confusingly) marketed as "DataFlash" */
@@ -459,12 +460,13 @@ static void blk_sync_complete(void *opaque, int ret)
 
 static void flash_sync_page(Flash *s, int page)
 {
-    QEMUIOVector *iov = g_new(QEMUIOVector, 1);
+    QEMUIOVector *iov;
 
     if (!s->blk || blk_is_read_only(s->blk)) {
         return;
     }
 
+    iov = g_new(QEMUIOVector, 1);
     qemu_iovec_init(iov, 1);
     qemu_iovec_add(iov, s->storage + page * s->pi->page_size,
                    s->pi->page_size);
@@ -474,13 +476,14 @@ static void flash_sync_page(Flash *s, int page)
 
 static inline void flash_sync_area(Flash *s, int64_t off, int64_t len)
 {
-    QEMUIOVector *iov = g_new(QEMUIOVector, 1);
+    QEMUIOVector *iov;
 
     if (!s->blk || blk_is_read_only(s->blk)) {
         return;
     }
 
     assert(!(len % BDRV_SECTOR_SIZE));
+    iov = g_new(QEMUIOVector, 1);
     qemu_iovec_init(iov, 1);
     qemu_iovec_add(iov, s->storage + off, len);
     blk_aio_pwritev(s->blk, off, iov, 0, blk_sync_complete, iov);
@@ -775,7 +778,7 @@ static void decode_dio_read_cmd(Flash *s)
     /* Dummy cycles modeled with bytes writes instead of bits */
     switch (get_man(s)) {
     case MAN_WINBOND:
-        s->needed_bytes += 8;
+        s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;
@@ -814,7 +817,8 @@ static void decode_qio_read_cmd(Flash *s)
     /* Dummy cycles modeled with bytes writes instead of bits */
     switch (get_man(s)) {
     case MAN_WINBOND:
-        s->needed_bytes += 8;
+        s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
+        s->needed_bytes += 4;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;

@@ -11,8 +11,8 @@
  *
  */
 
-#ifndef __DEVICE_TREE_H__
-#define __DEVICE_TREE_H__
+#ifndef DEVICE_TREE_H
+#define DEVICE_TREE_H
 
 #include "qemu-common.h"
 #include "qapi/qmp/qerror.h"
@@ -198,4 +198,4 @@ void fdt_info_dump(void *fdt);
 #define FDT_PCI_RANGE_IOPORT               0x01000000
 #define FDT_PCI_RANGE_CONFIG               0x00000000
 
-#endif /* __DEVICE_TREE_H__ */
+#endif /* DEVICE_TREE_H */

@@ -11,8 +11,8 @@
  * See the COPYING file in the top-level directory.
  */
 
-#ifndef _QEMU_VIRTIO_VGA_H
-#define _QEMU_VIRTIO_VGA_H
+#ifndef HW_VIRTIO_GPU_H
+#define HW_VIRTIO_GPU_H
 
 #include "qemu/queue.h"
 #include "ui/qemu-pixman.h"
@@ -118,6 +118,8 @@ typedef struct VirtIOGPU {
         uint32_t req_3d;
         uint32_t bytes_3d;
     } stats;
+
+    Error *migration_blocker;
 } VirtIOGPU;
 
 extern const GraphicHwOps virtio_gpu_ops;

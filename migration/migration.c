@@ -418,11 +418,11 @@ static void process_incoming_migration_co(void *opaque)
 
 void migration_fd_process_incoming(QEMUFile *f)
 {
-    Coroutine *co = qemu_coroutine_create(process_incoming_migration_co);
+    Coroutine *co = qemu_coroutine_create(process_incoming_migration_co, f);
 
     migrate_decompress_threads_create();
     qemu_file_set_blocking(f, false);
-    qemu_coroutine_enter(co, f);
+    qemu_coroutine_enter(co);
 }
 
 
@@ -1837,6 +1837,10 @@ static void *migration_thread(void *opaque)
     } else {
         if (old_vm_running && !entered_postcopy) {
             vm_start();
+        } else {
+            if (runstate_check(RUN_STATE_FINISH_MIGRATE)) {
+                runstate_set(RUN_STATE_POSTMIGRATE);
+            }
         }
     }
     qemu_bh_schedule(s->cleanup_bh);

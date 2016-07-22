@@ -16,8 +16,9 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef CPU_I386_H
-#define CPU_I386_H
+
+#ifndef I386_CPU_H
+#define I386_CPU_H
 
 #include "qemu-common.h"
 #include "cpu-qom.h"
@@ -129,8 +130,6 @@
    positions to ease oring with eflags. */
 /* current cpl */
 #define HF_CPL_SHIFT         0
-/* true if soft mmu is being used */
-#define HF_SOFTMMU_SHIFT     2
 /* true if hardware interrupts must be disabled for next instruction */
 #define HF_INHIBIT_IRQ_SHIFT 3
 /* 16 or 32 segments */
@@ -160,7 +159,6 @@
 #define HF_MPX_IU_SHIFT     26 /* BND registers in-use */
 
 #define HF_CPL_MASK          (3 << HF_CPL_SHIFT)
-#define HF_SOFTMMU_MASK      (1 << HF_SOFTMMU_SHIFT)
 #define HF_INHIBIT_IRQ_MASK  (1 << HF_INHIBIT_IRQ_SHIFT)
 #define HF_CS32_MASK         (1 << HF_CS32_SHIFT)
 #define HF_SS32_MASK         (1 << HF_SS32_SHIFT)
@@ -292,6 +290,7 @@
 
 #define MCG_CTL_P       (1ULL<<8)   /* MCG_CAP register available */
 #define MCG_SER_P       (1ULL<<24) /* MCA recovery/new status bits */
+#define MCG_LMCE_P      (1ULL<<27) /* Local Machine Check Supported */
 
 #define MCE_CAP_DEF     (MCG_CTL_P|MCG_SER_P)
 #define MCE_BANKS_DEF   10
@@ -301,6 +300,9 @@
 #define MCG_STATUS_RIPV (1ULL<<0)   /* restart ip valid */
 #define MCG_STATUS_EIPV (1ULL<<1)   /* ip points to correct instruction */
 #define MCG_STATUS_MCIP (1ULL<<2)   /* machine check in progress */
+#define MCG_STATUS_LMCE (1ULL<<3)   /* Local MCE signaled */
+
+#define MCG_EXT_CTL_LMCE_EN (1ULL<<0) /* Local MCE enabled */
 
 #define MCI_STATUS_VAL   (1ULL<<63)  /* valid error */
 #define MCI_STATUS_OVER  (1ULL<<62)  /* previous errors lost */
@@ -328,6 +330,10 @@
 #define MSR_TSC_ADJUST                  0x0000003b
 #define MSR_IA32_TSCDEADLINE            0x6e0
 
+#define FEATURE_CONTROL_LOCKED                    (1<<0)
+#define FEATURE_CONTROL_VMXON_ENABLED_OUTSIDE_SMX (1<<2)
+#define FEATURE_CONTROL_LMCE                      (1<<20)
+
 #define MSR_P6_PERFCTR0                 0xc1
 
 #define MSR_IA32_SMBASE                 0x9e
@@ -343,6 +349,7 @@
 #define MSR_MCG_CAP                     0x179
 #define MSR_MCG_STATUS                  0x17a
 #define MSR_MCG_CTL                     0x17b
+#define MSR_MCG_EXT_CTL                 0x4d0
 
 #define MSR_P6_EVNTSEL0                 0x186
 
@@ -440,6 +447,9 @@ typedef enum FeatureWord {
     FEAT_8000_0007_EDX, /* CPUID[8000_0007].EDX */
     FEAT_C000_0001_EDX, /* CPUID[C000_0001].EDX */
     FEAT_KVM,           /* CPUID[4000_0001].EAX (KVM_CPUID_FEATURES) */
+    FEAT_HYPERV_EAX,    /* CPUID[4000_0003].EAX */
+    FEAT_HYPERV_EBX,    /* CPUID[4000_0003].EBX */
+    FEAT_HYPERV_EDX,    /* CPUID[4000_0003].EDX */
     FEAT_SVM,           /* CPUID[8000_000A].EDX */
     FEAT_XSAVE,         /* CPUID[EAX=0xd,ECX=1].EAX */
     FEAT_6_EAX,         /* CPUID[6].EAX */
@@ -606,8 +616,10 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
 #define CPUID_7_0_EBX_AVX512ER (1U << 27) /* AVX-512 Exponential and Reciprocal */
 #define CPUID_7_0_EBX_AVX512CD (1U << 28) /* AVX-512 Conflict Detection */
 
+#define CPUID_7_0_ECX_UMIP     (1U << 2)
 #define CPUID_7_0_ECX_PKU      (1U << 3)
 #define CPUID_7_0_ECX_OSPKE    (1U << 4)
+#define CPUID_7_0_ECX_RDPID    (1U << 22)
 
 #define CPUID_XSAVE_XSAVEOPT   (1U << 0)
 #define CPUID_XSAVE_XSAVEC     (1U << 1)
@@ -834,6 +846,11 @@ typedef struct {
 #define TARGET_INSN_START_EXTRA_WORDS 1
 
 #define NB_OPMASK_REGS 8
+
+/* CPU can't have 0xFFFFFFFF APIC ID, use that value to distinguish
+ * that APIC ID hasn't been set yet
+ */
+#define UNASSIGNED_APIC_ID 0xFFFFFFFF
 
 typedef union X86LegacyXSaveArea {
     struct {
@@ -1111,6 +1128,7 @@ typedef struct CPUX86State {
 
     uint64_t mcg_cap;
     uint64_t mcg_ctl;
+    uint64_t mcg_ext_ctl;
     uint64_t mce_banks[MCE_BANKS_DEF*4];
 
     uint64_t tsc_aux;
@@ -1163,7 +1181,7 @@ struct X86CPU {
     bool expose_kvm;
     bool migratable;
     bool host_features;
-    int64_t apic_id;
+    uint32_t apic_id;
 
     /* if true the CPUID code directly forward host cache leaves to the guest */
     bool cache_info_passthrough;
@@ -1178,8 +1196,23 @@ struct X86CPU {
      */
     bool enable_pmu;
 
+    /* LMCE support can be enabled/disabled via cpu option 'lmce=on/off'. It is
+     * disabled by default to avoid breaking migration between QEMU with
+     * different LMCE configurations.
+     */
+    bool enable_lmce;
+
     /* Compatibility bits for old machine types: */
     bool enable_cpuid_0xb;
+
+    /* if true fill the top bits of the MTRR_PHYSMASKn variable range */
+    bool fill_mtrr_mask;
+
+    /* if true override the phys_bits value with a value read from the host */
+    bool host_phys_bits;
+
+    /* Number of physical address bits supported */
+    uint32_t phys_bits;
 
     /* in order to simplify APIC support, we leave this pointer to the
        user */
@@ -1188,6 +1221,10 @@ struct X86CPU {
     Notifier machine_done;
 
     struct kvm_msrs *kvm_msr_buf;
+
+    int32_t socket_id;
+    int32_t core_id;
+    int32_t thread_id;
 };
 
 static inline X86CPU *x86_env_get_cpu(CPUX86State *env)
@@ -1234,7 +1271,6 @@ void x86_cpu_exec_enter(CPUState *cpu);
 void x86_cpu_exec_exit(CPUState *cpu);
 
 X86CPU *cpu_x86_init(const char *cpu_model);
-X86CPU *cpu_x86_create(const char *cpu_model, Error **errp);
 void x86_cpu_list(FILE *f, fprintf_function cpu_fprintf);
 int cpu_x86_support_mca_broadcast(CPUX86State *env);
 
@@ -1403,10 +1439,12 @@ uint64_t cpu_get_tsc(CPUX86State *env);
 /* XXX: This value should match the one returned by CPUID
  * and in exec.c */
 # if defined(TARGET_X86_64)
-# define PHYS_ADDR_MASK 0xffffffffffLL
+# define TCG_PHYS_ADDR_BITS 40
 # else
-# define PHYS_ADDR_MASK 0xfffffffffLL
+# define TCG_PHYS_ADDR_BITS 36
 # endif
+
+#define PHYS_ADDR_MASK MAKE_64BIT_MASK(0, TCG_PHYS_ADDR_BITS)
 
 #define cpu_init(cpu_model) CPU(cpu_x86_init(cpu_model))
 
@@ -1589,4 +1627,4 @@ void x86_cpu_dump_local_apic_state(CPUState *cs, FILE *f,
 /* cpu.c */
 bool cpu_is_bsp(X86CPU *cpu);
 
-#endif /* CPU_I386_H */
+#endif /* I386_CPU_H */

@@ -35,12 +35,12 @@
 #define MMU_LOG(x)
 #endif
 
-void tlb_fill(CPUState *cs, target_ulong addr, int is_write, int mmu_idx,
-              uintptr_t retaddr)
+void tlb_fill(CPUState *cs, target_ulong addr, MMUAccessType access_type,
+              int mmu_idx, uintptr_t retaddr)
 {
     int ret;
 
-    ret = nios2_cpu_handle_mmu_fault(cs, addr, is_write, mmu_idx);
+    ret = nios2_cpu_handle_mmu_fault(cs, addr, (access_type == MMU_DATA_STORE), mmu_idx);
     if (unlikely(ret)) {
         if (retaddr) {
             /* now we have a real cpu fault */
