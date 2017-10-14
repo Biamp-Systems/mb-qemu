@@ -28,7 +28,7 @@
 #include "hw/devices.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
-#include "target-nios2/cpu.h"
+#include "target/nios2/cpu.h"
 #include "nios2.h"
 #include "hw/loader.h"
 #include "elf.h"

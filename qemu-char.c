@@ -499,7 +499,7 @@ void qemu_chr_fe_printf(CharBackend *be, const char *fmt, ...)
 
 static void remove_fd_in_watch(CharDriverState *chr);
 static void mux_chr_set_handlers(CharDriverState *chr, GMainContext *context);
-static void mux_set_focus(MuxDriver *d, int focus);
+static void mux_set_focus(CharDriverState *chr, int focus);
 
 static int null_chr_write(CharDriverState *chr, const uint8_t *buf, int len)
 {
@@ -666,7 +666,7 @@ static int mux_proc_byte(CharDriverState *chr, MuxDriver *d, int ch)
         case 'c':
             assert(d->mux_cnt > 0); /* handler registered with first fe */
             /* Switch to the next registered device */
-            mux_set_focus(d, (d->focus + 1) % d->mux_cnt);
+            mux_set_focus(chr, (d->focus + 1) % d->mux_cnt);
             break;
         case 't':
             d->timestamps = !d->timestamps;
@@ -826,8 +826,10 @@ static void mux_chr_set_handlers(CharDriverState *chr, GMainContext *context)
                              context, true);
 }
 
-static void mux_set_focus(MuxDriver *d, int focus)
+static void mux_set_focus(CharDriverState *chr, int focus)
 {
+    MuxDriver *d = chr->opaque;
+
     assert(focus >= 0);
     assert(focus < d->mux_cnt);
 
@@ -836,6 +838,7 @@ static void mux_set_focus(MuxDriver *d, int focus)
     }
 
     d->focus = focus;
+    chr->be = d->backends[focus];
     mux_chr_send_event(d, d->focus, CHR_EVENT_MUX_IN);
 }
 
@@ -935,7 +938,9 @@ void qemu_chr_fe_deinit(CharBackend *b)
 
     if (b->chr) {
         qemu_chr_fe_set_handlers(b, NULL, NULL, NULL, NULL, NULL, true);
-        b->chr->be = NULL;
+        if (b->chr->be == b) {
+            b->chr->be = NULL;
+        }
         if (b->chr->is_mux) {
             MuxDriver *d = b->chr->opaque;
             d->backends[b->tag] = NULL;
@@ -999,7 +1004,7 @@ void qemu_chr_fe_take_focus(CharBackend *b)
     }
 
     if (b->chr->is_mux) {
-        mux_set_focus(b->chr->opaque, b->tag);
+        mux_set_focus(b->chr, b->tag);
     }
 }
 
@@ -3272,14 +3277,13 @@ static void tcp_chr_telnet_init(CharDriverState *chr)
 }
 
 
-static void tcp_chr_tls_handshake(Object *source,
-                                  Error *err,
+static void tcp_chr_tls_handshake(QIOTask *task,
                                   gpointer user_data)
 {
     CharDriverState *chr = user_data;
     TCPCharDriver *s = chr->opaque;
 
-    if (err) {
+    if (qio_task_propagate_error(task, NULL)) {
         tcp_chr_disconnect(chr);
     } else {
         if (s->do_telnetopt) {
@@ -3487,20 +3491,23 @@ static void tcp_chr_free(CharDriverState *chr)
 }
 
 
-static void qemu_chr_socket_connected(Object *src, Error *err, void *opaque)
+static void qemu_chr_socket_connected(QIOTask *task, void *opaque)
 {
-    QIOChannelSocket *sioc = QIO_CHANNEL_SOCKET(src);
+    QIOChannelSocket *sioc = QIO_CHANNEL_SOCKET(qio_task_get_source(task));
     CharDriverState *chr = opaque;
     TCPCharDriver *s = chr->opaque;
+    Error *err = NULL;
 
-    if (err) {
+    if (qio_task_propagate_error(task, &err)) {
         check_report_connect_error(chr, err);
-        object_unref(src);
-        return;
+        error_free(err);
+        goto cleanup;
     }
 
     s->connect_err_reported = false;
     tcp_chr_new_client(chr, sioc);
+
+ cleanup:
     object_unref(OBJECT(sioc));
 }
 

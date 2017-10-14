@@ -7,6 +7,10 @@ MAKEFLAGS += -rR
 
 # Files with this suffixes are final, don't try to generate them
 # using implicit rules
+%/trace-events:
+%.hx:
+%.py:
+%.objs:
 %.d:
 %.h:
 %.c:
@@ -192,15 +196,15 @@ clean: clean-timestamp
 # save-vars
 # Usage: $(call save-vars, vars)
 # Save each variable $v in $vars as save-vars-$v, save their object's
-# variables, then clear $v.
+# variables, then clear $v.  saved-vars-$v contains the variables that
+# where saved for the objects, in order to speedup load-vars.
 define save-vars
     $(foreach v,$1,
         $(eval save-vars-$v := $(value $v))
-        $(foreach o,$($v),
-            $(foreach k,cflags libs objs,
-                $(if $($o-$k),
-                    $(eval save-vars-$o-$k := $($o-$k))
-                    $(eval $o-$k := ))))
+        $(eval saved-vars-$v := $(foreach o,$($v), \
+            $(if $($o-cflags), $o-cflags $(eval save-vars-$o-cflags := $($o-cflags))$(eval $o-cflags := )) \
+            $(if $($o-libs), $o-libs $(eval save-vars-$o-libs := $($o-libs))$(eval $o-libs := )) \
+            $(if $($o-objs), $o-objs $(eval save-vars-$o-objs := $($o-objs))$(eval $o-objs := ))))
         $(eval $v := ))
 endef
 
@@ -213,12 +217,10 @@ define load-vars
     $(eval $2-new-value := $(value $2))
     $(foreach v,$1,
         $(eval $v := $(value save-vars-$v))
-        $(foreach o,$($v),
-            $(foreach k,cflags libs objs,
-                $(if $(save-vars-$o-$k),
-                    $(eval $o-$k := $(save-vars-$o-$k))
-                    $(eval save-vars-$o-$k := ))))
-        $(eval save-vars-$v := ))
+        $(foreach o,$(saved-vars-$v),
+            $(eval $o := $(save-vars-$o)) $(eval save-vars-$o := ))
+        $(eval save-vars-$v := )
+        $(eval saved-vars-$v := ))
     $(eval $2 := $(value $2) $($2-new-value))
 endef
 
@@ -361,3 +363,15 @@ define unnest-vars
         $(eval -include $(patsubst %.o,%.d,$(patsubst %.mo,%.d,$($v))))
         $(eval $v := $(filter-out %/,$($v))))
 endef
+
+TEXI2MAN = $(call quiet-command, \
+	perl -Ww -- $(SRC_PATH)/scripts/texi2pod.pl $< $@.pod && \
+	$(POD2MAN) --section=$(subst .,,$(suffix $@)) --center=" " --release=" " $@.pod > $@, \
+	"GEN","$@")
+
+%.1:
+	$(call TEXI2MAN)
+%.7:
+	$(call TEXI2MAN)
+%.8:
+	$(call TEXI2MAN)

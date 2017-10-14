@@ -28,7 +28,7 @@
 #include "hw/devices.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
-#include "target-microblaze/cpu.h"
+#include "target/microblaze/cpu.h"
 #include "hw/loader.h"
 #include "elf.h"
 #include "sysemu/blockdev.h"

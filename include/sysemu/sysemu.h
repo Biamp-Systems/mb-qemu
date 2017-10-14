@@ -63,7 +63,6 @@ void qemu_system_vmstop_request_prepare(void);
 int qemu_shutdown_requested_get(void);
 int qemu_reset_requested_get(void);
 void qemu_system_killed(int signal, pid_t pid);
-void qemu_devices_reset(void);
 void qemu_system_reset(bool report);
 void qemu_system_guest_panicked(void);
 size_t qemu_target_page_bits(void);
@@ -167,13 +166,6 @@ extern int mem_prealloc;
 
 #define MAX_NODES 128
 #define NUMA_NODE_UNASSIGNED MAX_NODES
-
-/* The following shall be true for all CPUs:
- *   cpu->cpu_index < max_cpus <= MAX_CPUMASK_BITS
- *
- * Note that cpu->get_arch_id() may be larger than MAX_CPUMASK_BITS.
- */
-#define MAX_CPUMASK_BITS 288
 
 #define MAX_OPTION_ROMS 16
 typedef struct QEMUOptionRom {

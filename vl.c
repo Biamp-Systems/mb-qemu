@@ -65,6 +65,7 @@ int main(int argc, char **argv)
 #include "hw/bt.h"
 #include "sysemu/watchdog.h"
 #include "hw/smbios/smbios.h"
+#include "hw/acpi/acpi.h"
 #include "hw/xen/xen.h"
 #include "hw/qdev.h"
 #include "hw/loader.h"
@@ -92,6 +93,7 @@ int main(int argc, char **argv)
 #include "sysemu/cpus.h"
 #include "migration/colo.h"
 #include "sysemu/kvm.h"
+#include "sysemu/hax.h"
 #include "qapi/qmp/qjson.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
@@ -180,6 +182,7 @@ bool boot_strict;
 uint8_t *boot_splash_filedata;
 size_t boot_splash_filedata_size;
 uint8_t qemu_extra_params_fw[2];
+int only_migratable; /* turn it off unless user states otherwise */
 
 int icount_align_option;
 
@@ -1277,11 +1280,6 @@ static void smp_parse(QemuOpts *opts)
 
         max_cpus = qemu_opt_get_number(opts, "maxcpus", cpus);
 
-        if (max_cpus > MAX_CPUMASK_BITS) {
-            error_report("unsupported number of maxcpus");
-            exit(1);
-        }
-
         if (max_cpus < cpus) {
             error_report("maxcpus must be equal to or greater than smp");
             exit(1);
@@ -1635,16 +1633,6 @@ void vm_state_notify(int running, RunState state)
     }
 }
 
-/* reset/shutdown handler */
-
-typedef struct QEMUResetEntry {
-    QTAILQ_ENTRY(QEMUResetEntry) entry;
-    QEMUResetHandler *func;
-    void *opaque;
-} QEMUResetEntry;
-
-static QTAILQ_HEAD(reset_handlers, QEMUResetEntry) reset_handlers =
-    QTAILQ_HEAD_INITIALIZER(reset_handlers);
 static int reset_requested;
 static int shutdown_requested, shutdown_signal = -1;
 static pid_t shutdown_pid;
@@ -1732,38 +1720,6 @@ static int qemu_debug_requested(void)
     int r = debug_requested;
     debug_requested = 0;
     return r;
-}
-
-void qemu_register_reset(QEMUResetHandler *func, void *opaque)
-{
-    QEMUResetEntry *re = g_malloc0(sizeof(QEMUResetEntry));
-
-    re->func = func;
-    re->opaque = opaque;
-    QTAILQ_INSERT_TAIL(&reset_handlers, re, entry);
-}
-
-void qemu_unregister_reset(QEMUResetHandler *func, void *opaque)
-{
-    QEMUResetEntry *re;
-
-    QTAILQ_FOREACH(re, &reset_handlers, entry) {
-        if (re->func == func && re->opaque == opaque) {
-            QTAILQ_REMOVE(&reset_handlers, re, entry);
-            g_free(re);
-            return;
-        }
-    }
-}
-
-void qemu_devices_reset(void)
-{
-    QEMUResetEntry *re, *nre;
-
-    /* reset all devices */
-    QTAILQ_FOREACH_SAFE(re, &reset_handlers, entry, nre) {
-        re->func(re->opaque);
-    }
 }
 
 void qemu_system_reset(bool report)
@@ -1959,7 +1915,7 @@ static void main_loop(void)
     int64_t ti;
 #endif
     do {
-        nonblocking = !kvm_enabled() && !xen_enabled() && last_io > 0;
+        nonblocking = tcg_enabled() && last_io > 0;
 #ifdef CONFIG_PROFILER
         ti = profile_getclock();
 #endif
@@ -2859,7 +2815,8 @@ static bool object_create_initial(const char *type)
         g_str_equal(type, "filter-mirror") ||
         g_str_equal(type, "filter-redirector") ||
         g_str_equal(type, "colo-compare") ||
-        g_str_equal(type, "filter-rewriter")) {
+        g_str_equal(type, "filter-rewriter") ||
+        g_str_equal(type, "filter-replay")) {
         return false;
     }
 
@@ -2994,6 +2951,18 @@ static int global_init_func(void *opaque, QemuOpts *opts, Error **errp)
     return 0;
 }
 
+static int qemu_read_default_config_file(void)
+{
+    int ret;
+
+    ret = qemu_read_config_file(CONFIG_QEMU_CONFDIR "/qemu.conf");
+    if (ret < 0 && ret != -ENOENT) {
+        return ret;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv, char **envp)
 {
     int i;
@@ -3121,10 +3090,8 @@ int main(int argc, char **argv, char **envp)
         }
     }
 
-    if (defconfig) {
-        int ret;
-        ret = qemu_read_default_config_files(userconfig);
-        if (ret < 0) {
+    if (defconfig && userconfig) {
+        if (qemu_read_default_config_file() < 0) {
             exit(1);
         }
     }
@@ -3703,7 +3670,7 @@ int main(int argc, char **argv, char **envp)
                 if (!opts) {
                     exit(1);
                 }
-                do_acpitable_option(opts);
+                acpi_table_add(opts, &error_fatal);
                 break;
             case QEMU_OPTION_smbios:
                 opts = qemu_opts_parse_noisily(qemu_find_opts("smbios"),
@@ -3711,7 +3678,7 @@ int main(int argc, char **argv, char **envp)
                 if (!opts) {
                     exit(1);
                 }
-                do_smbios_option(opts);
+                smbios_entry_add(opts, &error_fatal);
                 break;
             case QEMU_OPTION_fwcfg:
                 opts = qemu_opts_parse_noisily(qemu_find_opts("fw_cfg"),
@@ -3723,6 +3690,10 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_enable_kvm:
                 olist = qemu_find_opts("machine");
                 qemu_opts_parse_noisily(olist, "accel=kvm", false);
+                break;
+            case QEMU_OPTION_enable_hax:
+                olist = qemu_find_opts("machine");
+                qemu_opts_parse_noisily(olist, "accel=hax", false);
                 break;
             case QEMU_OPTION_M:
             case QEMU_OPTION_machine:
@@ -3913,6 +3884,9 @@ int main(int argc, char **argv, char **envp)
                     runstate_set(RUN_STATE_INMIGRATE);
                 }
                 incoming = optarg;
+                break;
+            case QEMU_OPTION_only_migratable:
+                only_migratable = 1;
                 break;
             case QEMU_OPTION_nodefaults:
                 has_defaults = 0;
@@ -4418,8 +4392,8 @@ int main(int argc, char **argv, char **envp)
 
     cpu_ticks_init();
     if (icount_opts) {
-        if (kvm_enabled() || xen_enabled()) {
-            error_report("-icount is not allowed with kvm or xen");
+        if (!tcg_enabled()) {
+            error_report("-icount is not allowed with hardware virtualization");
             exit(1);
         }
         configure_icount(icount_opts, &error_abort);
@@ -4553,7 +4527,9 @@ int main(int argc, char **argv, char **envp)
 
     cpu_synchronize_all_post_init();
 
-    numa_post_machine_init();
+    if (hax_enabled()) {
+        hax_sync_vcpus();
+    }
 
     if (qemu_opts_foreach(qemu_find_opts("fw_cfg"),
                           parse_fw_cfg, fw_cfg_find(), NULL) != 0) {
@@ -4575,6 +4551,9 @@ int main(int argc, char **argv, char **envp)
                           device_init_func, NULL, NULL)) {
         exit(1);
     }
+
+    numa_post_machine_init();
+
     rom_reset_order_override();
 
     /* Did we create any drives that we failed to create a device for? */

@@ -6,7 +6,7 @@ HXCOMM construct option structures, enums and help message for specified
 HXCOMM architectures.
 HXCOMM HXCOMM can be used for comments, discarded from both texi and C
 
-DEFHEADING(Standard options:)
+DEFHEADING(Standard options)
 STEXI
 @table @option
 ETEXI
@@ -32,7 +32,6 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
     "                selects emulated machine ('-machine help' for list)\n"
     "                property accel=accel1[:accel2[:...]] selects accelerator\n"
     "                supported accelerators are kvm, xen, tcg (default: tcg)\n"
-    "                kernel_irqchip=on|off controls accelerated irqchip support\n"
     "                kernel_irqchip=on|off|split controls accelerated irqchip support (default=off)\n"
     "                vmport=on|off|auto controls emulation of vmport (default: auto)\n"
     "                kvm_shadow_mem=size of KVM shadow MMU in bytes\n"
@@ -119,11 +118,11 @@ specifies the maximum number of hotpluggable CPUs.
 ETEXI
 
 DEF("numa", HAS_ARG, QEMU_OPTION_numa,
-    "-numa node[,mem=size][,cpus=cpu[-cpu]][,nodeid=node]\n"
-    "-numa node[,memdev=id][,cpus=cpu[-cpu]][,nodeid=node]\n", QEMU_ARCH_ALL)
+    "-numa node[,mem=size][,cpus=firstcpu[-lastcpu]][,nodeid=node]\n"
+    "-numa node[,memdev=id][,cpus=firstcpu[-lastcpu]][,nodeid=node]\n", QEMU_ARCH_ALL)
 STEXI
-@item -numa node[,mem=@var{size}][,cpus=@var{cpu[-cpu]}][,nodeid=@var{node}]
-@itemx -numa node[,memdev=@var{id}][,cpus=@var{cpu[-cpu]}][,nodeid=@var{node}]
+@item -numa node[,mem=@var{size}][,cpus=@var{firstcpu}[-@var{lastcpu}]][,nodeid=@var{node}]
+@itemx -numa node[,memdev=@var{id}][,cpus=@var{firstcpu}[-@var{lastcpu}]][,nodeid=@var{node}]
 @findex -numa
 Simulate a multi node NUMA system. If @samp{mem}, @samp{memdev}
 and @samp{cpus} are omitted, resources are split equally. Also, note
@@ -250,7 +249,7 @@ use is discouraged as it may be removed from future versions.
 ETEXI
 
 DEF("m", HAS_ARG, QEMU_OPTION_m,
-    "-m[emory] [size=]megs[,slots=n,maxmem=size]\n"
+    "-m [size=]megs[,slots=n,maxmem=size]\n"
     "                configure guest RAM\n"
     "                size: initial amount of guest memory\n"
     "                slots: number of hotplug slots (default: none)\n"
@@ -468,7 +467,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Block device options:)
+DEFHEADING(Block device options)
 STEXI
 @table @option
 ETEXI
@@ -856,7 +855,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(USB options:)
+DEFHEADING(USB options)
 STEXI
 @table @option
 ETEXI
@@ -920,14 +919,14 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Display options:)
+DEFHEADING(Display options)
 STEXI
 @table @option
 ETEXI
 
 DEF("display", HAS_ARG, QEMU_OPTION_display,
     "-display sdl[,frame=on|off][,alt_grab=on|off][,ctrl_grab=on|off]\n"
-    "            [,window_close=on|off][,gl=on|off]|curses|none|\n"
+    "            [,window_close=on|off][,gl=on|off]\n"
     "-display gtk[,grab_on_hover=on|off][,gl=on|off]|\n"
     "-display vnc=<display>[,<optargs>]\n"
     "-display curses\n"
@@ -1449,7 +1448,7 @@ STEXI
 ETEXI
 ARCHHEADING(, QEMU_ARCH_I386)
 
-ARCHHEADING(i386 target only:, QEMU_ARCH_I386)
+ARCHHEADING(i386 target only, QEMU_ARCH_I386)
 STEXI
 @table @option
 ETEXI
@@ -1565,7 +1564,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Network options:)
+DEFHEADING(Network options)
 STEXI
 @table @option
 ETEXI
@@ -2146,7 +2145,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Character device options:)
+DEFHEADING(Character device options)
 STEXI
 
 The general form of a character device option is:
@@ -2481,7 +2480,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Device URL Syntax:)
+DEFHEADING(Device URL Syntax)
 STEXI
 
 In addition to using normal file images for the emulated storage devices,
@@ -2589,7 +2588,7 @@ qemu-system-i386 --drive file=sheepdog://192.0.2.1:30000/MyVirtualMachine
 See also @url{http://http://www.osrg.net/sheepdog/}.
 
 @item GlusterFS
-GlusterFS is an user space distributed file system.
+GlusterFS is a user space distributed file system.
 QEMU supports the use of GlusterFS volumes for hosting VM disk images using
 TCP, Unix Domain Sockets and RDMA transport protocols.
 
@@ -2711,7 +2710,7 @@ STEXI
 @end table
 ETEXI
 
-DEFHEADING(Bluetooth(R) options:)
+DEFHEADING(Bluetooth(R) options)
 STEXI
 @table @option
 ETEXI
@@ -2787,7 +2786,7 @@ ETEXI
 DEFHEADING()
 
 #ifdef CONFIG_TPM
-DEFHEADING(TPM device options:)
+DEFHEADING(TPM device options)
 
 DEF("tpmdev", HAS_ARG, QEMU_OPTION_tpmdev, \
     "-tpmdev passthrough,id=id[,path=path][,cancel-path=path]\n"
@@ -2861,7 +2860,7 @@ DEFHEADING()
 
 #endif
 
-DEFHEADING(Linux/Multiboot boot specific:)
+DEFHEADING(Linux/Multiboot boot specific)
 STEXI
 
 When using these options, you can use a given Linux or Multiboot
@@ -2917,7 +2916,7 @@ STEXI
 ETEXI
 DEFHEADING()
 
-DEFHEADING(Debug/Expert options:)
+DEFHEADING(Debug/Expert options)
 STEXI
 @table @option
 ETEXI
@@ -3280,6 +3279,17 @@ Enable KVM full virtualization support. This option is only available
 if KVM support is enabled when compiling.
 ETEXI
 
+DEF("enable-hax", 0, QEMU_OPTION_enable_hax, \
+    "-enable-hax     enable HAX virtualization support\n", QEMU_ARCH_I386)
+STEXI
+@item -enable-hax
+@findex -enable-hax
+Enable HAX (Hardware-based Acceleration eXecution) support. This option
+is only available if HAX support is enabled when compiling. HAX is only
+applicable to MAC and Windows platform, and thus does not conflict with
+KVM.
+ETEXI
+
 DEF("xen-domid", HAS_ARG, QEMU_OPTION_xen_domid,
     "-xen-domid id   specify xen guest domain id\n", QEMU_ARCH_ALL)
 DEF("xen-create", 0, QEMU_OPTION_xen_create,
@@ -3574,6 +3584,15 @@ be used to change settings (such as migration parameters) prior to issuing
 the migrate_incoming to allow the migration to begin.
 ETEXI
 
+DEF("only-migratable", 0, QEMU_OPTION_only_migratable, \
+    "-only-migratable     allow only migratable devices\n", QEMU_ARCH_ALL)
+STEXI
+@item -only-migratable
+@findex -only-migratable
+Only allow migratable devices. Devices will not be allowed to enter an
+unmigratable state.
+ETEXI
+
 DEF("nodefaults", 0, QEMU_OPTION_nodefaults, \
     "-nodefaults     don't create default devices\n", QEMU_ARCH_ALL)
 STEXI
@@ -3775,7 +3794,14 @@ Dump json-encoded vmstate information for current machine type to file
 in @var{file}
 ETEXI
 
+STEXI
+@end table
+ETEXI
+DEFHEADING()
 DEFHEADING(Generic object creation)
+STEXI
+@table @option
+ETEXI
 
 DEF("object", HAS_ARG, QEMU_OPTION_object,
     "-object TYPENAME[,PROP1=VALUE1,...]\n"

@@ -14,6 +14,7 @@
 #include "exec/exec-all.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/cpus.h"
+#include "sysemu/hw_accel.h"
 #include "sysemu/kvm.h"
 #include "hw/i386/apic_internal.h"
 #include "hw/sysbus.h"
@@ -534,7 +535,6 @@ static int patch_hypercalls(VAPICROMState *s)
     uint8_t alternates[2];
     const uint8_t *pattern;
     const uint8_t *patch;
-    int patches = 0;
     off_t pos;
     uint8_t *rom;
 
@@ -565,11 +565,6 @@ static int patch_hypercalls(VAPICROMState *s)
     }
 
     g_free(rom);
-
-    if (patches != 0 && patches != 2) {
-        return -1;
-    }
-
     return 0;
 }
 

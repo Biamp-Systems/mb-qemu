@@ -32,7 +32,7 @@
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
-#include "target-microblaze/cpu.h"
+#include "target/microblaze/cpu.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
