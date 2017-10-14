@@ -217,19 +217,12 @@ static void virtio_input_reset(VirtIODevice *vdev)
     }
 }
 
-static int virtio_input_load(QEMUFile *f, void *opaque, size_t size)
+static int virtio_input_post_load(void *opaque, int version_id)
 {
     VirtIOInput *vinput = opaque;
     VirtIOInputClass *vic = VIRTIO_INPUT_GET_CLASS(vinput);
     VirtIODevice *vdev = VIRTIO_DEVICE(vinput);
-    int ret;
 
-    ret = virtio_load(vdev, f, VIRTIO_INPUT_VM_VERSION);
-    if (ret) {
-        return ret;
-    }
-
-    /* post_load() */
     vinput->active = vdev->status & VIRTIO_CONFIG_S_DRIVER_OK;
     if (vic->change_active) {
         vic->change_active(vinput);
@@ -270,6 +263,16 @@ static void virtio_input_device_realize(DeviceState *dev, Error **errp)
     vinput->sts = virtio_add_queue(vdev, 64, virtio_input_handle_sts);
 }
 
+static void virtio_input_finalize(Object *obj)
+{
+    VirtIOInput *vinput = VIRTIO_INPUT(obj);
+    VirtIOInputConfig *cfg, *next;
+
+    QTAILQ_FOREACH_SAFE(cfg, &vinput->cfg_list, node, next) {
+        QTAILQ_REMOVE(&vinput->cfg_list, cfg, node);
+        g_free(cfg);
+    }
+}
 static void virtio_input_device_unrealize(DeviceState *dev, Error **errp)
 {
     VirtIOInputClass *vic = VIRTIO_INPUT_GET_CLASS(dev);
@@ -286,8 +289,16 @@ static void virtio_input_device_unrealize(DeviceState *dev, Error **errp)
     virtio_cleanup(vdev);
 }
 
-VMSTATE_VIRTIO_DEVICE(input, VIRTIO_INPUT_VM_VERSION, virtio_input_load,
-                      virtio_vmstate_save);
+static const VMStateDescription vmstate_virtio_input = {
+    .name = "virtio-input",
+    .minimum_version_id = VIRTIO_INPUT_VM_VERSION,
+    .version_id = VIRTIO_INPUT_VM_VERSION,
+    .fields = (VMStateField[]) {
+        VMSTATE_VIRTIO_DEVICE,
+        VMSTATE_END_OF_LIST()
+    },
+    .post_load = virtio_input_post_load,
+};
 
 static Property virtio_input_properties[] = {
     DEFINE_PROP_STRING("serial", VirtIOInput, serial),
@@ -318,6 +329,7 @@ static const TypeInfo virtio_input_info = {
     .class_size    = sizeof(VirtIOInputClass),
     .class_init    = virtio_input_class_init,
     .abstract      = true,
+    .instance_finalize = virtio_input_finalize,
 };
 
 /* ----------------------------------------------------------------- */

@@ -4,7 +4,7 @@
 #include "test-qmp-commands.h"
 #include "qapi/qmp/dispatch.h"
 #include "qemu/module.h"
-#include "qapi/qmp-input-visitor.h"
+#include "qapi/qobject-input-visitor.h"
 #include "tests/test-qapi-types.h"
 #include "tests/test-qapi-visit.h"
 
@@ -103,12 +103,27 @@ static void test_dispatch_cmd(void)
 }
 
 /* test commands that return an error due to invalid parameters */
-static void test_dispatch_cmd_error(void)
+static void test_dispatch_cmd_failure(void)
 {
     QDict *req = qdict_new();
+    QDict *args = qdict_new();
     QObject *resp;
 
     qdict_put_obj(req, "execute", QOBJECT(qstring_from_str("user_def_cmd2")));
+
+    resp = qmp_dispatch(QOBJECT(req));
+    assert(resp != NULL);
+    assert(qdict_haskey(qobject_to_qdict(resp), "error"));
+
+    qobject_decref(resp);
+    QDECREF(req);
+
+    /* check that with extra arguments it throws an error */
+    req = qdict_new();
+    qdict_put(args, "a", qint_from_int(66));
+    qdict_put(req, "arguments", args);
+
+    qdict_put_obj(req, "execute", QOBJECT(qstring_from_str("user_def_cmd")));
 
     resp = qmp_dispatch(QOBJECT(req));
     assert(resp != NULL);
@@ -229,7 +244,7 @@ static void test_dealloc_partial(void)
         ud2_dict = qdict_new();
         qdict_put_obj(ud2_dict, "string0", QOBJECT(qstring_from_str(text)));
 
-        v = qmp_input_visitor_new(QOBJECT(ud2_dict), true);
+        v = qobject_input_visitor_new(QOBJECT(ud2_dict), true);
         visit_type_UserDefTwo(v, NULL, &ud2, &err);
         visit_free(v);
         QDECREF(ud2_dict);
@@ -253,7 +268,7 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     g_test_add_func("/0.15/dispatch_cmd", test_dispatch_cmd);
-    g_test_add_func("/0.15/dispatch_cmd_error", test_dispatch_cmd_error);
+    g_test_add_func("/0.15/dispatch_cmd_failure", test_dispatch_cmd_failure);
     g_test_add_func("/0.15/dispatch_cmd_io", test_dispatch_cmd_io);
     g_test_add_func("/0.15/dealloc_types", test_dealloc_types);
     g_test_add_func("/0.15/dealloc_partial", test_dealloc_partial);

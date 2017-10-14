@@ -57,7 +57,7 @@
 typedef struct AlteraJUARTState {
     SysBusDevice busdev;
     MemoryRegion mmio;
-    CharDriverState *chr;
+    CharBackend chr;
     qemu_irq irq;
 
     uint8_t rx_fifo[FIFO_LENGTH];
@@ -92,9 +92,7 @@ static uint64_t juart_read(void *opaque, hwaddr addr,
         r = s->rx_fifo[(s->rx_fifo_pos - s->rx_fifo_len) & (FIFO_LENGTH - 1)];
         if (s->rx_fifo_len) {
             s->rx_fifo_len--;
-            if (s->chr) {
-                qemu_chr_accept_input(s->chr);
-            }
+            qemu_chr_fe_accept_input(&s->chr);
             s->jdata = r | DATA_RVALID | (s->rx_fifo_len) << 16;
             s->jcontrol |= CONTROL_RI;
         } else {
@@ -123,13 +121,15 @@ static void juart_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case R_DATA:
-        if ((s->chr) /*&& (s->control & UART_TRANSMIT_ENABLE)*/) {
+        if (1 /*&& (s->control & UART_TRANSMIT_ENABLE)*/) {
             c = value & 0xFF;
             /* We do not decrement the write fifo,
              * we "tranmsmit" instanteniously, CONTROL_WI always asserted */
             s->jcontrol |= CONTROL_WI;
             s->jdata = c;
-            qemu_chr_fe_write(s->chr, &c, 1);
+            /* XXX this blocks entire thread. Rewrite to use
+             * qemu_chr_fe_write and background I/O callbacks */
+            qemu_chr_fe_write_all(&s->chr, &c, 1);
             juart_update_irq(s);
         }
         break;
@@ -212,8 +212,8 @@ static int altera_juart_init(SysBusDevice *dev)
     memory_region_init_io(&s->mmio,  OBJECT(s), &juart_ops, s,
                           TYPE_ALTERA_JUART, 2 * 4);
     sysbus_init_mmio(dev, &s->mmio);
-    qemu_chr_add_handlers(s->chr, juart_can_receive, juart_receive,
-                            juart_event, s);
+    qemu_chr_fe_set_handlers(&s->chr, juart_can_receive, juart_receive,
+                             juart_event, s, NULL, true);
     return 0;
 }
 
@@ -235,7 +235,7 @@ void altera_juart_create(int uart, const hwaddr addr, qemu_irq irq)
     chr = serial_hds[uart];
     if (!chr) {
         snprintf(label, ARRAY_SIZE(label), "%s%d", chr_name, uart);
-        chr = qemu_chr_new(label, "null", NULL);
+        chr = qemu_chr_new(label, "null");
         if (!(chr)) {
             hw_error("Can't assign serial port to altera juart%d.\n", uart);
         }

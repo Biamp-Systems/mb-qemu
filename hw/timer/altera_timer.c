@@ -180,7 +180,7 @@ static void altera_timer_realize(DeviceState *dev, Error **errp)
     assert(t->freq_hz != 0);
 
     t->bh = qemu_bh_new(timer_hit, t);
-    t->ptimer = ptimer_init(t->bh);
+    t->ptimer = ptimer_init(t->bh, PTIMER_POLICY_DEFAULT);
     ptimer_set_freq(t->ptimer, t->freq_hz);
     ptimer_set_limit(t->ptimer, 0xffffffff, 1);
 

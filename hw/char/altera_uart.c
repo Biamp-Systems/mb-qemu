@@ -22,6 +22,7 @@
 #include "hw/sysbus.h"
 #include "sysemu/char.h"
 #include "hw/char/serial.h"
+#include "qapi/error.h"
 
 #define R_RXDATA        0
 #define R_TXDATA        1
@@ -65,7 +66,7 @@
 typedef struct AlteraUART {
     SysBusDevice busdev;
     MemoryRegion mmio;
-    CharDriverState *chr;
+    CharBackend chr;
     qemu_irq irq;
 
     uint32_t regs[R_MAX];
@@ -94,6 +95,7 @@ static uint64_t uart_read(void *opaque, hwaddr addr,
         r = s->regs[R_RXDATA];
         s->regs[R_STATUS] &= ~STATUS_RRDY;
         uart_update_irq(s);
+        qemu_chr_fe_accept_input(&s->chr);
         break;
 
     case R_STATUS:
@@ -126,9 +128,9 @@ static void uart_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case R_TXDATA:
-        if (s->chr) {
-            qemu_chr_fe_write(s->chr, &ch, 1);
-        }
+        /* XXX this blocks entire thread. Rewrite to use
+         * qemu_chr_fe_write and background I/O callbacks */
+        qemu_chr_fe_write_all(&s->chr, &ch, 1);
 
         s->regs[addr] = value;
         break;
@@ -175,26 +177,29 @@ static const MemoryRegionOps uart_ops = {
     }
 };
 
-static int altera_uart_init(SysBusDevice *dev)
+static void altera_uart_realize(DeviceState *dev, Error **errp)
 {
     AlteraUART *s = ALTERA_UART(dev);
 
+    if (!s->chr.chr) {
+        qemu_chr_fe_init(&s->chr, serial_hds[0], &error_abort);
+    }
+
+    qemu_chr_fe_set_handlers(&s->chr, uart_can_rx, uart_rx,
+                             uart_event, s, NULL, true);
+}
+
+static void altera_uart_init(Object *obj)
+{
+    AlteraUART *s = ALTERA_UART(obj);
+
     s->regs[R_STATUS] = STATUS_TMT | STATUS_TRDY; /* Always ready to tx */
 
-    sysbus_init_irq(dev, &s->irq);
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
 
     memory_region_init_io(&s->mmio, OBJECT(s), &uart_ops, s,
                           TYPE_ALTERA_UART, R_MAX * sizeof(uint32_t));
-    sysbus_init_mmio(dev, &s->mmio);
-
-    if (!s->chr) {
-        s->chr = serial_hds[0];
-    }
-    if (s->chr) {
-        qemu_chr_add_handlers(s->chr, uart_can_rx, uart_rx, uart_event, s);
-    }
-
-    return 0;
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->mmio);
 }
 
 static Property altera_uart_properties[] = {
@@ -205,9 +210,8 @@ static Property altera_uart_properties[] = {
 static void altera_uart_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    k->init = altera_uart_init;
+    dc->realize = altera_uart_realize;
     dc->props = altera_uart_properties;
 }
 
@@ -215,6 +219,7 @@ static const TypeInfo altera_uart_info = {
     .name          = TYPE_ALTERA_UART,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(AlteraUART),
+    .instance_init = altera_uart_init,
     .class_init    = altera_uart_class_init,
 };
 

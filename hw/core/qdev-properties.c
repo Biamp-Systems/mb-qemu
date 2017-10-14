@@ -705,13 +705,19 @@ static void get_pci_host_devaddr(Object *obj, Visitor *v, const char *name,
     DeviceState *dev = DEVICE(obj);
     Property *prop = opaque;
     PCIHostDeviceAddress *addr = qdev_get_prop_ptr(dev, prop);
-    char buffer[] = "xxxx:xx:xx.x";
+    char buffer[] = "ffff:ff:ff.f";
     char *p = buffer;
     int rc = 0;
 
-    rc = snprintf(buffer, sizeof(buffer), "%04x:%02x:%02x.%d",
-                  addr->domain, addr->bus, addr->slot, addr->function);
-    assert(rc == sizeof(buffer) - 1);
+    /*
+     * Catch "invalid" device reference from vfio-pci and allow the
+     * default buffer representing the non-existant device to be used.
+     */
+    if (~addr->domain || ~addr->bus || ~addr->slot || ~addr->function) {
+        rc = snprintf(buffer, sizeof(buffer), "%04x:%02x:%02x.%0d",
+                      addr->domain, addr->bus, addr->slot, addr->function);
+        assert(rc == sizeof(buffer) - 1);
+    }
 
     visit_type_str(v, name, &p, errp);
 }
@@ -1084,7 +1090,7 @@ int qdev_prop_check_globals(void)
 }
 
 static void qdev_prop_set_globals_for_type(DeviceState *dev,
-                                const char *typename)
+                                           const char *typename)
 {
     GList *l;
 
@@ -1100,7 +1106,7 @@ static void qdev_prop_set_globals_for_type(DeviceState *dev,
         if (err != NULL) {
             error_prepend(&err, "can't apply global %s.%s=%s: ",
                           prop->driver, prop->property, prop->value);
-            if (prop->errp) {
+            if (!dev->hotplugged && prop->errp) {
                 error_propagate(prop->errp, err);
             } else {
                 assert(prop->user_provided);

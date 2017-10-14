@@ -304,7 +304,7 @@ static int mptsas_process_scsi_io_request(MPTSASState *s,
         goto bad;
     }
 
-    req = g_new(MPTSASRequest, 1);
+    req = g_new0(MPTSASRequest, 1);
     QTAILQ_INSERT_TAIL(&s->pending, req, next);
     req->scsi_io = *scsi_io;
     req->dev = s;
@@ -1269,7 +1269,7 @@ static const struct SCSIBusInfo mptsas_scsi_info = {
     .load_request = mptsas_load_request,
 };
 
-static void mptsas_scsi_init(PCIDevice *dev, Error **errp)
+static void mptsas_scsi_realize(PCIDevice *dev, Error **errp)
 {
     DeviceState *d = DEVICE(dev);
     MPTSASState *s = MPT_SAS(dev);
@@ -1295,6 +1295,8 @@ static void mptsas_scsi_init(PCIDevice *dev, Error **errp)
         /* With msi=auto, we fall back to MSI off silently */
         error_free(err);
 
+        /* Only used for migration.  */
+        s->msi_in_use = (ret == 0);
     }
 
     memory_region_init_io(&s->mmio_io, OBJECT(s), &mptsas_mmio_ops, s,
@@ -1370,7 +1372,7 @@ static const VMStateDescription vmstate_mptsas = {
     .post_load = mptsas_post_load,
     .fields      = (VMStateField[]) {
         VMSTATE_PCI_DEVICE(dev, MPTSASState),
-
+        VMSTATE_BOOL(msi_in_use, MPTSASState),
         VMSTATE_UINT32(state, MPTSASState),
         VMSTATE_UINT8(who_init, MPTSASState),
         VMSTATE_UINT8(doorbell_state, MPTSASState),
@@ -1424,7 +1426,7 @@ static void mptsas1068_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
     PCIDeviceClass *pc = PCI_DEVICE_CLASS(oc);
 
-    pc->realize = mptsas_scsi_init;
+    pc->realize = mptsas_scsi_realize;
     pc->exit = mptsas_scsi_uninit;
     pc->romfile = 0;
     pc->vendor_id = PCI_VENDOR_ID_LSI_LOGIC;

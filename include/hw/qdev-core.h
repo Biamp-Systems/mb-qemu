@@ -224,7 +224,7 @@ typedef struct BusChild {
 struct BusState {
     Object obj;
     DeviceState *parent;
-    const char *name;
+    char *name;
     HotplugHandler *hotplug_handler;
     int max_index;
     bool realized;
@@ -261,7 +261,9 @@ struct PropertyInfo {
  * @used: Set to true if property was used when initializing a device.
  * @errp: Error destination, used like first argument of error_setg()
  *        in case property setting fails later. If @errp is NULL, we
- *        print warnings instead of ignoring errors silently.
+ *        print warnings instead of ignoring errors silently. For
+ *        hotplugged devices, errp is always ignored and warnings are
+ *        printed instead.
  */
 typedef struct GlobalProperty {
     const char *driver;

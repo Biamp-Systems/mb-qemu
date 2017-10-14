@@ -17,6 +17,7 @@
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
+#include "qemu-version.h"
 #include <machine/trap.h>
 
 #include "qapi/error.h"
@@ -66,23 +67,6 @@ int cpu_get_pic_interrupt(CPUX86State *env)
 }
 #endif
 
-/* These are no-ops because we are not threadsafe.  */
-static inline void cpu_exec_start(CPUArchState *env)
-{
-}
-
-static inline void cpu_exec_end(CPUArchState *env)
-{
-}
-
-static inline void start_exclusive(void)
-{
-}
-
-static inline void end_exclusive(void)
-{
-}
-
 void fork_start(void)
 {
 }
@@ -92,14 +76,6 @@ void fork_end(int child)
     if (child) {
         gdbserver_fork(thread_cpu);
     }
-}
-
-void cpu_list_lock(void)
-{
-}
-
-void cpu_list_unlock(void)
-{
 }
 
 #ifdef TARGET_I386
@@ -171,7 +147,11 @@ void cpu_loop(CPUX86State *env)
     //target_siginfo_t info;
 
     for(;;) {
-        trapnr = cpu_x86_exec(cs);
+        cpu_exec_start(cs);
+        trapnr = cpu_exec(cs);
+        cpu_exec_end(cs);
+        process_queued_cpu_work(cs);
+
         switch(trapnr) {
         case 0x80:
             /* syscall from int $0x80 */
@@ -512,7 +492,10 @@ void cpu_loop(CPUSPARCState *env)
     //target_siginfo_t info;
 
     while (1) {
-        trapnr = cpu_sparc_exec(cs);
+        cpu_exec_start(cs);
+        trapnr = cpu_exec(cs);
+        cpu_exec_end(cs);
+        process_queued_cpu_work(cs);
 
         switch (trapnr) {
 #ifndef TARGET_SPARC64
@@ -667,7 +650,8 @@ void cpu_loop(CPUSPARCState *env)
 
 static void usage(void)
 {
-    printf("qemu-" TARGET_NAME " version " QEMU_VERSION ", Copyright (c) 2003-2008 Fabrice Bellard\n"
+    printf("qemu-" TARGET_NAME " version " QEMU_VERSION QEMU_PKGVERSION
+           "\n" QEMU_COPYRIGHT "\n"
            "usage: qemu-" TARGET_NAME " [options] program [arguments...]\n"
            "BSD CPU emulator (compiled for %s emulation)\n"
            "\n"
@@ -711,6 +695,16 @@ static void usage(void)
 
 THREAD CPUState *thread_cpu;
 
+bool qemu_cpu_is_self(CPUState *cpu)
+{
+    return thread_cpu == cpu;
+}
+
+void qemu_cpu_kick(CPUState *cpu)
+{
+    cpu_exit(cpu);
+}
+
 /* Assumes contents are already zeroed.  */
 void init_task_state(TaskState *ts)
 {
@@ -746,6 +740,8 @@ int main(int argc, char **argv)
     if (argc <= 1)
         usage();
 
+    module_call_init(MODULE_INIT_TRACE);
+    qemu_init_cpu_list();
     module_call_init(MODULE_INIT_QOM);
 
     if ((envlist = envlist_create()) == NULL) {
@@ -1131,7 +1127,6 @@ int main(int argc, char **argv)
         gdbserver_start (gdbstub_port);
         gdb_handlesig(cpu, 0);
     }
-    trace_init_vcpu_events();
     cpu_loop(env);
     /* never exits */
     return 0;

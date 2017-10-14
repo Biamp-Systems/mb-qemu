@@ -29,7 +29,6 @@
 #include "hw/isa/isa.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/sysbus.h"
-#include "hw/boards.h"
 #include "trace.h"
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
@@ -180,7 +179,7 @@ static void fw_cfg_bootsplash(FWCfgState *s)
         temp = qemu_opt_get(opts, "splash-time");
         if (temp != NULL) {
             p = (char *)temp;
-            boot_splash_time = strtol(p, (char **)&p, 10);
+            boot_splash_time = strtol(p, &p, 10);
         }
     }
 
@@ -240,7 +239,7 @@ static void fw_cfg_reboot(FWCfgState *s)
         temp = qemu_opt_get(opts, "reboot-timeout");
         if (temp != NULL) {
             p = (char *)temp;
-            reboot_timeout = strtol(p, (char **)&p, 10);
+            reboot_timeout = strtol(p, &p, 10);
         }
     }
     /* validate the input */
@@ -744,7 +743,7 @@ static int get_fw_cfg_order(FWCfgState *s, const char *name)
     }
 
     /* Stick unknown stuff at the end. */
-    error_report("warning: Unknown firmware file in legacy mode: %s\n", name);
+    error_report("warning: Unknown firmware file in legacy mode: %s", name);
     return FW_CFG_ORDER_OVERRIDE_LAST;
 }
 
@@ -883,9 +882,8 @@ static void fw_cfg_init1(DeviceState *dev)
     qdev_init_nofail(dev);
 
     fw_cfg_add_bytes(s, FW_CFG_SIGNATURE, (char *)"QEMU", 4);
-    fw_cfg_add_bytes(s, FW_CFG_UUID, qemu_uuid, 16);
+    fw_cfg_add_bytes(s, FW_CFG_UUID, &qemu_uuid, 16);
     fw_cfg_add_i16(s, FW_CFG_NOGRAPHIC, (uint16_t)!machine->enable_graphics);
-    fw_cfg_add_i16(s, FW_CFG_NB_CPUS, (uint16_t)smp_cpus);
     fw_cfg_add_i16(s, FW_CFG_BOOT_MENU, (uint16_t)boot_menu);
     fw_cfg_bootsplash(s);
     fw_cfg_reboot(s);
@@ -990,6 +988,7 @@ static void fw_cfg_class_init(ObjectClass *klass, void *data)
 static const TypeInfo fw_cfg_info = {
     .name          = TYPE_FW_CFG,
     .parent        = TYPE_SYS_BUS_DEVICE,
+    .abstract      = true,
     .instance_size = sizeof(FWCfgState),
     .class_init    = fw_cfg_class_init,
 };

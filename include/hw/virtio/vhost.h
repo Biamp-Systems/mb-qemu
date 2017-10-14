@@ -14,11 +14,12 @@ struct vhost_virtqueue {
     void *avail;
     void *used;
     int num;
+    unsigned long long desc_phys;
+    unsigned desc_size;
+    unsigned long long avail_phys;
+    unsigned avail_size;
     unsigned long long used_phys;
     unsigned used_size;
-    void *ring;
-    unsigned long long ring_phys;
-    unsigned ring_size;
     EventNotifier masked_notifier;
 };
 
@@ -86,4 +87,8 @@ uint64_t vhost_get_features(struct vhost_dev *hdev, const int *feature_bits,
 void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
                         uint64_t features);
 bool vhost_has_free_slot(void);
+
+int vhost_net_set_backend(struct vhost_dev *hdev,
+                          struct vhost_vring_file *file);
+
 #endif

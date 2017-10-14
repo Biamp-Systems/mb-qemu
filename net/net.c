@@ -690,9 +690,13 @@ static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
         buffer = iov[0].iov_base;
         offset = iov[0].iov_len;
     } else {
-        buf = g_new(uint8_t, NET_BUFSIZE);
+        offset = iov_size(iov, iovcnt);
+        if (offset > NET_BUFSIZE) {
+            return -1;
+        }
+        buf = g_malloc(offset);
         buffer = buf;
-        offset = iov_to_buf(iov, iovcnt, 0, buf, NET_BUFSIZE);
+        offset = iov_to_buf(iov, iovcnt, 0, buf, offset);
     }
 
     if (flags & QEMU_NET_PACKET_FLAG_RAW && nc->info->receive_raw) {
@@ -1179,6 +1183,7 @@ void hmp_host_net_remove(Monitor *mon, const QDict *qdict)
 
     qemu_del_net_client(nc->peer);
     qemu_del_net_client(nc);
+    qemu_opts_del(qemu_opts_find(qemu_find_opts("net"), device));
 }
 
 void netdev_add(QemuOpts *opts, Error **errp)
@@ -1602,9 +1607,8 @@ void net_socket_rs_init(SocketReadState *rs,
 
 /*
  * Returns
- * 0: SocketReadState is not ready
- * 1: SocketReadState is ready
- * otherwise error occurs
+ * 0: success
+ * -1: error occurs
  */
 int net_fill_rstate(SocketReadState *rs, const uint8_t *buf, int size)
 {
@@ -1649,13 +1653,13 @@ int net_fill_rstate(SocketReadState *rs, const uint8_t *buf, int size)
             if (rs->index >= rs->packet_len) {
                 rs->index = 0;
                 rs->state = 0;
-                if (rs->finalize) {
-                    rs->finalize(rs);
-                }
-                return 1;
+                assert(rs->finalize);
+                rs->finalize(rs);
             }
             break;
         }
     }
+
+    assert(size == 0);
     return 0;
 }

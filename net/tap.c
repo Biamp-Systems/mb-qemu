@@ -312,6 +312,7 @@ static void tap_cleanup(NetClientState *nc)
 
     if (s->vhost_net) {
         vhost_net_cleanup(s->vhost_net);
+        g_free(s->vhost_net);
         s->vhost_net = NULL;
     }
 
@@ -856,7 +857,9 @@ free_fail:
             return -1;
         }
 
-        fd = net_bridge_run_helper(tap->helper, DEFAULT_BRIDGE_INTERFACE,
+        fd = net_bridge_run_helper(tap->helper,
+                                   tap->has_br ?
+                                   tap->br : DEFAULT_BRIDGE_INTERFACE,
                                    errp);
         if (fd == -1) {
             return -1;

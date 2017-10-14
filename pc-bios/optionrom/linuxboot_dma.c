@@ -25,7 +25,7 @@ asm(
 ".global _start\n"
 "_start:\n"
 "   .short 0xaa55\n"
-"   .byte 0\n" /* size in 512 units, filled in by signrom.py */
+"   .byte 3\n" /* desired size in 512 units; signrom.py adds padding */
 "   .byte 0xcb\n" /* far return without prefix */
 "   .org 0x18\n"
 "   .short 0\n"
@@ -122,24 +122,14 @@ static inline void writel_es(uint16_t offset, uint32_t val)
 
 static inline uint32_t bswap32(uint32_t x)
 {
-    return
-        ((x & 0x000000ffU) << 24) |
-        ((x & 0x0000ff00U) <<  8) |
-        ((x & 0x00ff0000U) >>  8) |
-        ((x & 0xff000000U) >> 24);
+    asm("bswapl %0" : "=r" (x) : "0" (x));
+    return x;
 }
 
 static inline uint64_t bswap64(uint64_t x)
 {
-    return
-        ((x & 0x00000000000000ffULL) << 56) |
-        ((x & 0x000000000000ff00ULL) << 40) |
-        ((x & 0x0000000000ff0000ULL) << 24) |
-        ((x & 0x00000000ff000000ULL) <<  8) |
-        ((x & 0x000000ff00000000ULL) >>  8) |
-        ((x & 0x0000ff0000000000ULL) >> 24) |
-        ((x & 0x00ff000000000000ULL) >> 40) |
-        ((x & 0xff00000000000000ULL) >> 56);
+    asm("bswapl %%eax; bswapl %%edx; xchg %%eax, %%edx" : "=A" (x) : "0" (x));
+    return x;
 }
 
 static inline uint64_t cpu_to_be64(uint64_t x)
@@ -157,7 +147,11 @@ static inline uint32_t be32_to_cpu(uint32_t x)
     return bswap32(x);
 }
 
-static void bios_cfg_read_entry(void *buf, uint16_t entry, uint32_t len)
+/* clang is happy to inline this function, and bloats the
+ * ROM.
+ */
+static __attribute__((__noinline__))
+void bios_cfg_read_entry(void *buf, uint16_t entry, uint32_t len)
 {
     FWCfgDmaAccess access;
     uint32_t control = (entry << 16) | BIOS_CFG_DMA_CTL_SELECT

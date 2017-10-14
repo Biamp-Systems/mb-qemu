@@ -53,13 +53,13 @@
 #include "hw/pci/pci_bus.h"
 #include "hw/pci-host/q35.h"
 #include "hw/i386/x86-iommu.h"
-#include "hw/timer/hpet.h"
 
 #include "hw/acpi/aml-build.h"
 
 #include "qapi/qmp/qint.h"
 #include "qom/qom-qobject.h"
-#include "hw/i386/x86-iommu.h"
+#include "hw/i386/amd_iommu.h"
+#include "hw/i386/intel_iommu.h"
 
 #include "hw/acpi/ipmi.h"
 
@@ -339,24 +339,38 @@ build_fadt(GArray *table_data, BIOSLinker *linker, AcpiPmInfo *pm,
 void pc_madt_cpu_entry(AcpiDeviceIf *adev, int uid,
                        CPUArchIdList *apic_ids, GArray *entry)
 {
-    int apic_id;
-    AcpiMadtProcessorApic *apic = acpi_data_push(entry, sizeof *apic);
+    uint32_t apic_id = apic_ids->cpus[uid].arch_id;
 
-    apic_id = apic_ids->cpus[uid].arch_id;
-    apic->type = ACPI_APIC_PROCESSOR;
-    apic->length = sizeof(*apic);
-    apic->processor_id = uid;
-    apic->local_apic_id = apic_id;
-    if (apic_ids->cpus[uid].cpu != NULL) {
-        apic->flags = cpu_to_le32(1);
+    /* ACPI spec says that LAPIC entry for non present
+     * CPU may be omitted from MADT or it must be marked
+     * as disabled. However omitting non present CPU from
+     * MADT breaks hotplug on linux. So possible CPUs
+     * should be put in MADT but kept disabled.
+     */
+    if (apic_id < 255) {
+        AcpiMadtProcessorApic *apic = acpi_data_push(entry, sizeof *apic);
+
+        apic->type = ACPI_APIC_PROCESSOR;
+        apic->length = sizeof(*apic);
+        apic->processor_id = uid;
+        apic->local_apic_id = apic_id;
+        if (apic_ids->cpus[uid].cpu != NULL) {
+            apic->flags = cpu_to_le32(1);
+        } else {
+            apic->flags = cpu_to_le32(0);
+        }
     } else {
-        /* ACPI spec says that LAPIC entry for non present
-         * CPU may be omitted from MADT or it must be marked
-         * as disabled. However omitting non present CPU from
-         * MADT breaks hotplug on linux. So possible CPUs
-         * should be put in MADT but kept disabled.
-         */
-        apic->flags = cpu_to_le32(0);
+        AcpiMadtProcessorX2Apic *apic = acpi_data_push(entry, sizeof *apic);
+
+        apic->type = ACPI_APIC_LOCAL_X2APIC;
+        apic->length = sizeof(*apic);
+        apic->uid = cpu_to_le32(uid);
+        apic->x2apic_id = cpu_to_le32(apic_id);
+        if (apic_ids->cpus[uid].cpu != NULL) {
+            apic->flags = cpu_to_le32(1);
+        } else {
+            apic->flags = cpu_to_le32(0);
+        }
     }
 }
 
@@ -368,11 +382,11 @@ build_madt(GArray *table_data, BIOSLinker *linker, PCMachineState *pcms)
     int madt_start = table_data->len;
     AcpiDeviceIfClass *adevc = ACPI_DEVICE_IF_GET_CLASS(pcms->acpi_dev);
     AcpiDeviceIf *adev = ACPI_DEVICE_IF(pcms->acpi_dev);
+    bool x2apic_mode = false;
 
     AcpiMultipleApicTable *madt;
     AcpiMadtIoApic *io_apic;
     AcpiMadtIntsrcovr *intsrcovr;
-    AcpiMadtLocalNmi *local_nmi;
     int i;
 
     madt = acpi_data_push(table_data, sizeof *madt);
@@ -381,6 +395,9 @@ build_madt(GArray *table_data, BIOSLinker *linker, PCMachineState *pcms)
 
     for (i = 0; i < apic_ids->len; i++) {
         adevc->madt_cpu(adev, i, apic_ids, table_data);
+        if (apic_ids->cpus[i].arch_id > 254) {
+            x2apic_mode = true;
+        }
     }
     g_free(apic_ids);
 
@@ -413,12 +430,25 @@ build_madt(GArray *table_data, BIOSLinker *linker, PCMachineState *pcms)
         intsrcovr->flags  = cpu_to_le16(0xd); /* active high, level triggered */
     }
 
-    local_nmi = acpi_data_push(table_data, sizeof *local_nmi);
-    local_nmi->type         = ACPI_APIC_LOCAL_NMI;
-    local_nmi->length       = sizeof(*local_nmi);
-    local_nmi->processor_id = 0xff; /* all processors */
-    local_nmi->flags        = cpu_to_le16(0);
-    local_nmi->lint         = 1; /* ACPI_LINT1 */
+    if (x2apic_mode) {
+        AcpiMadtLocalX2ApicNmi *local_nmi;
+
+        local_nmi = acpi_data_push(table_data, sizeof *local_nmi);
+        local_nmi->type   = ACPI_APIC_LOCAL_X2APIC_NMI;
+        local_nmi->length = sizeof(*local_nmi);
+        local_nmi->uid    = 0xFFFFFFFF; /* all processors */
+        local_nmi->flags  = cpu_to_le16(0);
+        local_nmi->lint   = 1; /* ACPI_LINT1 */
+    } else {
+        AcpiMadtLocalNmi *local_nmi;
+
+        local_nmi = acpi_data_push(table_data, sizeof *local_nmi);
+        local_nmi->type         = ACPI_APIC_LOCAL_NMI;
+        local_nmi->length       = sizeof(*local_nmi);
+        local_nmi->processor_id = 0xff; /* all processors */
+        local_nmi->flags        = cpu_to_le16(0);
+        local_nmi->lint         = 1; /* ACPI_LINT1 */
+    }
 
     build_header(linker, table_data,
                  (void *)(table_data->data + madt_start), "APIC",
@@ -600,6 +630,10 @@ static void build_append_pci_bus_devices(Aml *parent_scope, PCIBus *bus,
         QLIST_FOREACH(sec, &bus->child, sibling) {
             int32_t devfn = sec->parent_dev->devfn;
 
+            if (pci_bus_is_root(sec) || pci_bus_is_express(sec)) {
+                continue;
+            }
+
             aml_append(method, aml_name("^S%.02X.PCNT", devfn));
         }
     }
@@ -747,6 +781,27 @@ static void crs_range_free(gpointer data)
     g_free(entry);
 }
 
+typedef struct CrsRangeSet {
+    GPtrArray *io_ranges;
+    GPtrArray *mem_ranges;
+    GPtrArray *mem_64bit_ranges;
+ } CrsRangeSet;
+
+static void crs_range_set_init(CrsRangeSet *range_set)
+{
+    range_set->io_ranges = g_ptr_array_new_with_free_func(crs_range_free);
+    range_set->mem_ranges = g_ptr_array_new_with_free_func(crs_range_free);
+    range_set->mem_64bit_ranges =
+            g_ptr_array_new_with_free_func(crs_range_free);
+}
+
+static void crs_range_set_free(CrsRangeSet *range_set)
+{
+    g_ptr_array_free(range_set->io_ranges, true);
+    g_ptr_array_free(range_set->mem_ranges, true);
+    g_ptr_array_free(range_set->mem_64bit_ranges, true);
+}
+
 static gint crs_range_compare(gconstpointer a, gconstpointer b)
 {
      CrsRangeEntry *entry_a = *(CrsRangeEntry **)a;
@@ -764,7 +819,7 @@ static gint crs_range_compare(gconstpointer a, gconstpointer b)
 static void crs_replace_with_free_ranges(GPtrArray *ranges,
                                          uint64_t start, uint64_t end)
 {
-    GPtrArray *free_ranges = g_ptr_array_new_with_free_func(crs_range_free);
+    GPtrArray *free_ranges = g_ptr_array_new();
     uint64_t free_base = start;
     int i;
 
@@ -788,7 +843,7 @@ static void crs_replace_with_free_ranges(GPtrArray *ranges,
         g_ptr_array_add(ranges, g_ptr_array_index(free_ranges, i));
     }
 
-    g_ptr_array_free(free_ranges, false);
+    g_ptr_array_free(free_ranges, true);
 }
 
 /*
@@ -831,18 +886,17 @@ static void crs_range_merge(GPtrArray *range)
     g_ptr_array_free(tmp, true);
 }
 
-static Aml *build_crs(PCIHostState *host,
-                      GPtrArray *io_ranges, GPtrArray *mem_ranges)
+static Aml *build_crs(PCIHostState *host, CrsRangeSet *range_set)
 {
     Aml *crs = aml_resource_template();
-    GPtrArray *host_io_ranges = g_ptr_array_new_with_free_func(crs_range_free);
-    GPtrArray *host_mem_ranges = g_ptr_array_new_with_free_func(crs_range_free);
+    CrsRangeSet temp_range_set;
     CrsRangeEntry *entry;
     uint8_t max_bus = pci_bus_num(host->bus);
     uint8_t type;
     int devfn;
     int i;
 
+    crs_range_set_init(&temp_range_set);
     for (devfn = 0; devfn < ARRAY_SIZE(host->bus->devices); devfn++) {
         uint64_t range_base, range_limit;
         PCIDevice *dev = host->bus->devices[devfn];
@@ -866,9 +920,11 @@ static Aml *build_crs(PCIHostState *host,
             }
 
             if (r->type & PCI_BASE_ADDRESS_SPACE_IO) {
-                crs_range_insert(host_io_ranges, range_base, range_limit);
+                crs_range_insert(temp_range_set.io_ranges,
+                                 range_base, range_limit);
             } else { /* "memory" */
-                crs_range_insert(host_mem_ranges, range_base, range_limit);
+                crs_range_insert(temp_range_set.mem_ranges,
+                                 range_base, range_limit);
             }
         }
 
@@ -887,7 +943,8 @@ static Aml *build_crs(PCIHostState *host,
              * that do not support multiple root buses
              */
             if (range_base && range_base <= range_limit) {
-                crs_range_insert(host_io_ranges, range_base, range_limit);
+                crs_range_insert(temp_range_set.io_ranges,
+                                 range_base, range_limit);
             }
 
             range_base =
@@ -900,7 +957,14 @@ static Aml *build_crs(PCIHostState *host,
              * that do not support multiple root buses
              */
             if (range_base && range_base <= range_limit) {
-                crs_range_insert(host_mem_ranges, range_base, range_limit);
+                uint64_t length = range_limit - range_base + 1;
+                if (range_limit <= UINT32_MAX && length <= UINT32_MAX) {
+                    crs_range_insert(temp_range_set.mem_ranges,
+                                     range_base, range_limit);
+                } else {
+                    crs_range_insert(temp_range_set.mem_64bit_ranges,
+                                     range_base, range_limit);
+                }
             }
 
             range_base =
@@ -913,35 +977,55 @@ static Aml *build_crs(PCIHostState *host,
              * that do not support multiple root buses
              */
             if (range_base && range_base <= range_limit) {
-                crs_range_insert(host_mem_ranges, range_base, range_limit);
+                uint64_t length = range_limit - range_base + 1;
+                if (range_limit <= UINT32_MAX && length <= UINT32_MAX) {
+                    crs_range_insert(temp_range_set.mem_ranges,
+                                     range_base, range_limit);
+                } else {
+                    crs_range_insert(temp_range_set.mem_64bit_ranges,
+                                     range_base, range_limit);
+                }
             }
         }
     }
 
-    crs_range_merge(host_io_ranges);
-    for (i = 0; i < host_io_ranges->len; i++) {
-        entry = g_ptr_array_index(host_io_ranges, i);
+    crs_range_merge(temp_range_set.io_ranges);
+    for (i = 0; i < temp_range_set.io_ranges->len; i++) {
+        entry = g_ptr_array_index(temp_range_set.io_ranges, i);
         aml_append(crs,
                    aml_word_io(AML_MIN_FIXED, AML_MAX_FIXED,
                                AML_POS_DECODE, AML_ENTIRE_RANGE,
                                0, entry->base, entry->limit, 0,
                                entry->limit - entry->base + 1));
-        crs_range_insert(io_ranges, entry->base, entry->limit);
+        crs_range_insert(range_set->io_ranges, entry->base, entry->limit);
     }
-    g_ptr_array_free(host_io_ranges, true);
 
-    crs_range_merge(host_mem_ranges);
-    for (i = 0; i < host_mem_ranges->len; i++) {
-        entry = g_ptr_array_index(host_mem_ranges, i);
+    crs_range_merge(temp_range_set.mem_ranges);
+    for (i = 0; i < temp_range_set.mem_ranges->len; i++) {
+        entry = g_ptr_array_index(temp_range_set.mem_ranges, i);
         aml_append(crs,
                    aml_dword_memory(AML_POS_DECODE, AML_MIN_FIXED,
                                     AML_MAX_FIXED, AML_NON_CACHEABLE,
                                     AML_READ_WRITE,
                                     0, entry->base, entry->limit, 0,
                                     entry->limit - entry->base + 1));
-        crs_range_insert(mem_ranges, entry->base, entry->limit);
+        crs_range_insert(range_set->mem_ranges, entry->base, entry->limit);
     }
-    g_ptr_array_free(host_mem_ranges, true);
+
+    crs_range_merge(temp_range_set.mem_64bit_ranges);
+    for (i = 0; i < temp_range_set.mem_64bit_ranges->len; i++) {
+        entry = g_ptr_array_index(temp_range_set.mem_64bit_ranges, i);
+        aml_append(crs,
+                   aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED,
+                                    AML_MAX_FIXED, AML_NON_CACHEABLE,
+                                    AML_READ_WRITE,
+                                    0, entry->base, entry->limit, 0,
+                                    entry->limit - entry->base + 1));
+        crs_range_insert(range_set->mem_64bit_ranges,
+                         entry->base, entry->limit);
+    }
+
+    crs_range_set_free(&temp_range_set);
 
     aml_append(crs,
         aml_word_bus_number(AML_MIN_FIXED, AML_MAX_FIXED, AML_POS_DECODE,
@@ -1898,8 +1982,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
 {
     CrsRangeEntry *entry;
     Aml *dsdt, *sb_scope, *scope, *dev, *method, *field, *pkg, *crs;
-    GPtrArray *mem_ranges = g_ptr_array_new_with_free_func(crs_range_free);
-    GPtrArray *io_ranges = g_ptr_array_new_with_free_func(crs_range_free);
+    CrsRangeSet crs_range_set;
     PCMachineState *pcms = PC_MACHINE(machine);
     PCMachineClass *pcmc = PC_MACHINE_GET_CLASS(machine);
     uint32_t nr_mem = machine->ram_slots;
@@ -1985,9 +2068,17 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
         method = aml_method("_E03", 0, AML_NOTSERIALIZED);
         aml_append(method, aml_call0(MEMORY_HOTPLUG_HANDLER_PATH));
         aml_append(scope, method);
+
+        if (pcms->acpi_nvdimm_state.is_enabled) {
+            method = aml_method("_E04", 0, AML_NOTSERIALIZED);
+            aml_append(method, aml_notify(aml_name("\\_SB.NVDR"),
+                                          aml_int(0x80)));
+            aml_append(scope, method);
+        }
     }
     aml_append(dsdt, scope);
 
+    crs_range_set_init(&crs_range_set);
     bus = PC_MACHINE(machine)->bus;
     if (bus) {
         QLIST_FOREACH(bus, &bus->child, sibling) {
@@ -2014,8 +2105,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
             }
 
             aml_append(dev, build_prt(false));
-            crs = build_crs(PCI_HOST_BRIDGE(BUS(bus)->parent),
-                            io_ranges, mem_ranges);
+            crs = build_crs(PCI_HOST_BRIDGE(BUS(bus)->parent), &crs_range_set);
             aml_append(dev, aml_name_decl("_CRS", crs));
             aml_append(scope, dev);
             aml_append(dsdt, scope);
@@ -2036,9 +2126,9 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
                     AML_POS_DECODE, AML_ENTIRE_RANGE,
                     0x0000, 0x0000, 0x0CF7, 0x0000, 0x0CF8));
 
-    crs_replace_with_free_ranges(io_ranges, 0x0D00, 0xFFFF);
-    for (i = 0; i < io_ranges->len; i++) {
-        entry = g_ptr_array_index(io_ranges, i);
+    crs_replace_with_free_ranges(crs_range_set.io_ranges, 0x0D00, 0xFFFF);
+    for (i = 0; i < crs_range_set.io_ranges->len; i++) {
+        entry = g_ptr_array_index(crs_range_set.io_ranges, i);
         aml_append(crs,
             aml_word_io(AML_MIN_FIXED, AML_MAX_FIXED,
                         AML_POS_DECODE, AML_ENTIRE_RANGE,
@@ -2051,11 +2141,11 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
                          AML_CACHEABLE, AML_READ_WRITE,
                          0, 0x000A0000, 0x000BFFFF, 0, 0x00020000));
 
-    crs_replace_with_free_ranges(mem_ranges,
+    crs_replace_with_free_ranges(crs_range_set.mem_ranges,
                                  range_lob(pci_hole),
                                  range_upb(pci_hole));
-    for (i = 0; i < mem_ranges->len; i++) {
-        entry = g_ptr_array_index(mem_ranges, i);
+    for (i = 0; i < crs_range_set.mem_ranges->len; i++) {
+        entry = g_ptr_array_index(crs_range_set.mem_ranges, i);
         aml_append(crs,
             aml_dword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
                              AML_NON_CACHEABLE, AML_READ_WRITE,
@@ -2064,11 +2154,18 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
     }
 
     if (!range_is_empty(pci_hole64)) {
-        aml_append(crs,
-            aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
-                             AML_CACHEABLE, AML_READ_WRITE,
-                             0, range_lob(pci_hole64), range_upb(pci_hole64), 0,
-                             range_upb(pci_hole64) + 1 - range_lob(pci_hole64)));
+        crs_replace_with_free_ranges(crs_range_set.mem_64bit_ranges,
+                                     range_lob(pci_hole64),
+                                     range_upb(pci_hole64));
+        for (i = 0; i < crs_range_set.mem_64bit_ranges->len; i++) {
+            entry = g_ptr_array_index(crs_range_set.mem_64bit_ranges, i);
+            aml_append(crs,
+                       aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED,
+                                        AML_MAX_FIXED,
+                                        AML_CACHEABLE, AML_READ_WRITE,
+                                        0, entry->base, entry->limit,
+                                        0, entry->limit - entry->base + 1));
+        }
     }
 
     if (misc->tpm_version != TPM_VERSION_UNSPEC) {
@@ -2090,8 +2187,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
     aml_append(dev, aml_name_decl("_CRS", crs));
     aml_append(scope, dev);
 
-    g_ptr_array_free(io_ranges, true);
-    g_ptr_array_free(mem_ranges, true);
+    crs_range_set_free(&crs_range_set);
 
     /* reserve PCIHP resources */
     if (pm->pcihp_io_len) {
@@ -2331,7 +2427,6 @@ static void
 build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
 {
     AcpiSystemResourceAffinityTable *srat;
-    AcpiSratProcessorAffinity *core;
     AcpiSratMemoryAffinity *numamem;
 
     int i;
@@ -2350,22 +2445,34 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     srat->reserved1 = cpu_to_le32(1);
 
     for (i = 0; i < apic_ids->len; i++) {
-        int j;
-        int apic_id = apic_ids->cpus[i].arch_id;
+        int j = numa_get_node_for_cpu(i);
+        uint32_t apic_id = apic_ids->cpus[i].arch_id;
 
-        core = acpi_data_push(table_data, sizeof *core);
-        core->type = ACPI_SRAT_PROCESSOR_APIC;
-        core->length = sizeof(*core);
-        core->local_apic_id = apic_id;
-        for (j = 0; j < nb_numa_nodes; j++) {
-            if (test_bit(i, numa_info[j].node_cpu)) {
+        if (apic_id < 255) {
+            AcpiSratProcessorAffinity *core;
+
+            core = acpi_data_push(table_data, sizeof *core);
+            core->type = ACPI_SRAT_PROCESSOR_APIC;
+            core->length = sizeof(*core);
+            core->local_apic_id = apic_id;
+            if (j < nb_numa_nodes) {
                 core->proximity_lo = j;
-                break;
             }
+            memset(core->proximity_hi, 0, 3);
+            core->local_sapic_eid = 0;
+            core->flags = cpu_to_le32(1);
+        } else {
+            AcpiSratProcessorX2ApicAffinity *core;
+
+            core = acpi_data_push(table_data, sizeof *core);
+            core->type = ACPI_SRAT_PROCESSOR_x2APIC;
+            core->length = sizeof(*core);
+            core->x2apic_id = cpu_to_le32(apic_id);
+            if (j < nb_numa_nodes) {
+                core->proximity_domain = cpu_to_le32(j);
+            }
+            core->flags = cpu_to_le32(1);
         }
-        memset(core->proximity_hi, 0, 3);
-        core->local_sapic_eid = 0;
-        core->flags = cpu_to_le32(1);
     }
 
 
@@ -2498,10 +2605,67 @@ build_dmar_q35(GArray *table_data, BIOSLinker *linker)
     scope->length = ioapic_scope_size;
     scope->enumeration_id = ACPI_BUILD_IOAPIC_ID;
     scope->bus = Q35_PSEUDO_BUS_PLATFORM;
-    scope->path[0] = cpu_to_le16(Q35_PSEUDO_DEVFN_IOAPIC);
+    scope->path[0].device = PCI_SLOT(Q35_PSEUDO_DEVFN_IOAPIC);
+    scope->path[0].function = PCI_FUNC(Q35_PSEUDO_DEVFN_IOAPIC);
 
     build_header(linker, table_data, (void *)(table_data->data + dmar_start),
                  "DMAR", table_data->len - dmar_start, 1, NULL, NULL);
+}
+/*
+ *   IVRS table as specified in AMD IOMMU Specification v2.62, Section 5.2
+ *   accessible here http://support.amd.com/TechDocs/48882_IOMMU.pdf
+ */
+static void
+build_amd_iommu(GArray *table_data, BIOSLinker *linker)
+{
+    int iommu_start = table_data->len;
+    AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu_get_default());
+
+    /* IVRS header */
+    acpi_data_push(table_data, sizeof(AcpiTableHeader));
+    /* IVinfo - IO virtualization information common to all
+     * IOMMU units in a system
+     */
+    build_append_int_noprefix(table_data, 40UL << 8/* PASize */, 4);
+    /* reserved */
+    build_append_int_noprefix(table_data, 0, 8);
+
+    /* IVHD definition - type 10h */
+    build_append_int_noprefix(table_data, 0x10, 1);
+    /* virtualization flags */
+    build_append_int_noprefix(table_data,
+                             (1UL << 0) | /* HtTunEn      */
+                             (1UL << 4) | /* iotblSup     */
+                             (1UL << 6) | /* PrefSup      */
+                             (1UL << 7),  /* PPRSup       */
+                             1);
+    /* IVHD length */
+    build_append_int_noprefix(table_data, 0x24, 2);
+    /* DeviceID */
+    build_append_int_noprefix(table_data, s->devid, 2);
+    /* Capability offset */
+    build_append_int_noprefix(table_data, s->capab_offset, 2);
+    /* IOMMU base address */
+    build_append_int_noprefix(table_data, s->mmio.addr, 8);
+    /* PCI Segment Group */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU info */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU Feature Reporting */
+    build_append_int_noprefix(table_data,
+                             (48UL << 30) | /* HATS   */
+                             (48UL << 28) | /* GATS   */
+                             (1UL << 2),    /* GTSup  */
+                             4);
+    /*
+     *   Type 1 device entry reporting all devices
+     *   These are 4-byte device entries currently reporting the range of
+     *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
+     */
+    build_append_int_noprefix(table_data, 0x0000001, 4);
+
+    build_header(linker, table_data, (void *)(table_data->data + iommu_start),
+                 "IVRS", table_data->len - iommu_start, 1, NULL, NULL);
 }
 
 static GArray *
@@ -2561,11 +2725,6 @@ static bool acpi_get_mcfg(AcpiMcfgInfo *mcfg)
     mcfg->mcfg_size = qint_get_int(qobject_to_qint(o));
     qobject_decref(o);
     return true;
-}
-
-static bool acpi_has_iommu(void)
-{
-    return !!x86_iommu_get_default();
 }
 
 static
@@ -2647,13 +2806,19 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
         acpi_add_table(table_offsets, tables_blob);
         build_mcfg_q35(tables_blob, tables->linker, &mcfg);
     }
-    if (acpi_has_iommu()) {
-        acpi_add_table(table_offsets, tables_blob);
-        build_dmar_q35(tables_blob, tables->linker);
+    if (x86_iommu_get_default()) {
+        IommuType IOMMUType = x86_iommu_get_type();
+        if (IOMMUType == TYPE_AMD) {
+            acpi_add_table(table_offsets, tables_blob);
+            build_amd_iommu(tables_blob, tables->linker);
+        } else if (IOMMUType == TYPE_INTEL) {
+            acpi_add_table(table_offsets, tables_blob);
+            build_dmar_q35(tables_blob, tables->linker);
+        }
     }
     if (pcms->acpi_nvdimm_state.is_enabled) {
         nvdimm_build_acpi(table_offsets, tables_blob, tables->linker,
-                          pcms->acpi_nvdimm_state.dsm_mem);
+                          &pcms->acpi_nvdimm_state, machine->ram_slots);
     }
 
     /* Add tables supplied by user (if any) */
@@ -2695,7 +2860,7 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
          */
         int legacy_aml_len =
             pcmc->legacy_acpi_table_size +
-            ACPI_BUILD_LEGACY_CPU_AML_SIZE * max_cpus;
+            ACPI_BUILD_LEGACY_CPU_AML_SIZE * pcms->apic_id_limit;
         int legacy_table_size =
             ROUND_UP(tables_blob->len - aml_len + legacy_aml_len,
                      ACPI_BUILD_ALIGN_SIZE);
@@ -2771,7 +2936,7 @@ static MemoryRegion *acpi_add_rom_blob(AcpiBuildState *build_state,
                                        uint64_t max_size)
 {
     return rom_add_blob(name, blob->data, acpi_data_len(blob), max_size, -1,
-                        name, acpi_build_update, build_state);
+                        name, acpi_build_update, build_state, NULL);
 }
 
 static const VMStateDescription vmstate_acpi_build = {
@@ -2796,7 +2961,7 @@ void acpi_setup(void)
         return;
     }
 
-    if (!pcmc->has_acpi_build) {
+    if (!pcms->acpi_build_enabled) {
         ACPI_BUILD_DPRINTF("ACPI build disabled. Bailing out.\n");
         return;
     }

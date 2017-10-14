@@ -531,6 +531,7 @@ static void vmxnet3_complete_packet(VMXNET3State *s, int qidx, uint32_t tx_ridx)
 
     VMXNET3_RING_DUMP(VMW_RIPRN, "TXC", qidx, &s->txq_descr[qidx].comp_ring);
 
+    memset(&txcq_descr, 0, sizeof(txcq_descr));
     txcq_descr.txdIdx = tx_ridx;
     txcq_descr.gen = vmxnet3_ring_curr_gen(&s->txq_descr[qidx].comp_ring);
 
@@ -1166,6 +1167,10 @@ vmxnet3_io_bar0_write(void *opaque, hwaddr addr,
                       uint64_t val, unsigned size)
 {
     VMXNET3State *s = opaque;
+
+    if (!s->device_active) {
+        return;
+    }
 
     if (VMW_IS_MULTIREG_ADDR(addr, VMXNET3_REG_TXPROD,
                         VMXNET3_DEVICE_MAX_TX_QUEUES, VMXNET3_REG_ALIGN)) {

@@ -73,7 +73,6 @@ static void nios2_cpu_initfn(Object *obj)
 
     cpu->mmu_present = true;
     cs->env_ptr = env;
-    cpu_exec_init(cs, &error_abort);
 
 #if !defined(CONFIG_USER_ONLY)
     mmu_init(&env->mmu);
@@ -102,6 +101,14 @@ static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
     Nios2CPUClass *ncc = NIOS2_CPU_GET_CLASS(dev);
+
+    Error *local_err = NULL;
+
+    cpu_exec_realizefn(cs, &local_err);
+    if (local_err != NULL) {
+        error_propagate(errp, local_err);
+        return;
+    }
 
     qemu_init_vcpu(cs);
     cpu_reset(cs);
@@ -206,13 +213,6 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     cc->gdb_read_register = nios2_cpu_gdb_read_register;
     cc->gdb_write_register = nios2_cpu_gdb_write_register;
     cc->gdb_num_core_regs = 49;
-
-    /*
-     * Reason: nios2_cpu_initfn() calls cpu_exec_init(), which saves
-     * the object in cpus -> dangling pointer after final
-     * object_unref().
-     */
-    dc->cannot_destroy_with_object_finalize_yet = true;
 }
 
 static const TypeInfo nios2_cpu_type_info = {
