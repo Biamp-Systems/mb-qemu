@@ -34,7 +34,7 @@
 #include "exec/ram_addr.h"
 #include "exec/address-spaces.h"
 #include "qemu/event_notifier.h"
-#include "trace.h"
+#include "trace-root.h"
 #include "hw/irq.h"
 
 #include "hw/boards.h"
@@ -2000,8 +2000,9 @@ int kvm_cpu_exec(CPUState *cpu)
                 ret = EXCP_INTERRUPT;
                 break;
             case KVM_SYSTEM_EVENT_CRASH:
+                kvm_cpu_synchronize_state(cpu);
                 qemu_mutex_lock_iothread();
-                qemu_system_guest_panicked();
+                qemu_system_guest_panicked(cpu_get_crash_info(cpu));
                 qemu_mutex_unlock_iothread();
                 ret = 0;
                 break;

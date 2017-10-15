@@ -221,7 +221,7 @@ void altera_juart_create(int uart, const hwaddr addr, qemu_irq irq)
 {
     DeviceState *dev;
     SysBusDevice *bus;
-    CharDriverState *chr;
+    Chardev *chr;
     const char chr_name[] = "juart";
     char label[ARRAY_SIZE(chr_name) + 1];
 

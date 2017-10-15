@@ -25,7 +25,7 @@
 #include "qemu-common.h"
 #define NO_CPU_IO_DEFS
 #include "cpu.h"
-#include "trace.h"
+#include "trace-root.h"
 #include "disas/disas.h"
 #include "exec/exec-all.h"
 #include "tcg.h"
@@ -1290,6 +1290,8 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
         /* flush must be done */
         tb_flush(cpu);
         mmap_unlock();
+        /* Make the execution loop process the flush as soon as possible.  */
+        cpu->exception_index = EXCP_INTERRUPT;
         cpu_loop_exit(cpu);
     }
 

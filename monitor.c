@@ -40,6 +40,7 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/numa.h"
 #include "monitor/monitor.h"
+#include "qemu/config-file.h"
 #include "qemu/readline.h"
 #include "ui/console.h"
 #include "ui/input.h"
@@ -59,7 +60,7 @@
 #include "qapi/qmp/json-streamer.h"
 #include "qapi/qmp/json-parser.h"
 #include "qom/object_interfaces.h"
-#include "trace.h"
+#include "trace-root.h"
 #include "trace/control.h"
 #include "monitor/hmp-target.h"
 #ifdef CONFIG_TRACE_SIMPLE
@@ -1529,7 +1530,9 @@ static void hmp_boot_set(Monitor *mon, const QDict *qdict)
 
 static void hmp_info_mtree(Monitor *mon, const QDict *qdict)
 {
-    mtree_info((fprintf_function)monitor_printf, mon);
+    bool flatview = qdict_get_try_bool(qdict, "flatview", false);
+
+    mtree_info((fprintf_function)monitor_printf, mon, flatview);
 }
 
 static void hmp_info_numa(Monitor *mon, const QDict *qdict)
@@ -3193,8 +3196,8 @@ static void ringbuf_completion(ReadLineState *rs, const char *str)
         ChardevInfo *chr_info = list->value;
 
         if (!strncmp(chr_info->label, str, len)) {
-            CharDriverState *chr = qemu_chr_find(chr_info->label);
-            if (chr && chr_is_ringbuf(chr)) {
+            Chardev *chr = qemu_chr_find(chr_info->label);
+            if (chr && CHARDEV_IS_RINGBUF(chr)) {
                 readline_add_completion(rs, chr_info->label);
             }
         }
@@ -3983,7 +3986,7 @@ static void __attribute__((constructor)) monitor_lock_init(void)
     qemu_mutex_init(&monitor_lock);
 }
 
-void monitor_init(CharDriverState *chr, int flags)
+void monitor_init(Chardev *chr, int flags)
 {
     static int is_first_init = 1;
     Monitor *mon;

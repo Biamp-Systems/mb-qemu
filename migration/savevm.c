@@ -356,7 +356,7 @@ static const VMStateDescription vmstate_configuration = {
     .pre_save = configuration_pre_save,
     .fields = (VMStateField[]) {
         VMSTATE_UINT32(len, SaveState),
-        VMSTATE_VBUFFER_ALLOC_UINT32(name, SaveState, 0, NULL, 0, len),
+        VMSTATE_VBUFFER_ALLOC_UINT32(name, SaveState, 0, NULL, len),
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription*[]) {
@@ -590,8 +590,14 @@ int register_savevm_live(DeviceState *dev,
     if (dev) {
         char *id = qdev_get_dev_path(dev);
         if (id) {
-            pstrcpy(se->idstr, sizeof(se->idstr), id);
-            pstrcat(se->idstr, sizeof(se->idstr), "/");
+            if (snprintf(se->idstr, sizeof(se->idstr), "%s/", id) >=
+                sizeof(se->idstr)) {
+                error_report("Path too long for VMState (%s)", id);
+                g_free(id);
+                g_free(se);
+
+                return -1;
+            }
             g_free(id);
 
             se->compat = g_new0(CompatEntry, 1);
@@ -656,7 +662,8 @@ void unregister_savevm(DeviceState *dev, const char *idstr, void *opaque)
 int vmstate_register_with_alias_id(DeviceState *dev, int instance_id,
                                    const VMStateDescription *vmsd,
                                    void *opaque, int alias_id,
-                                   int required_for_version)
+                                   int required_for_version,
+                                   Error **errp)
 {
     SaveStateEntry *se;
 
@@ -673,9 +680,14 @@ int vmstate_register_with_alias_id(DeviceState *dev, int instance_id,
     if (dev) {
         char *id = qdev_get_dev_path(dev);
         if (id) {
-            pstrcpy(se->idstr, sizeof(se->idstr), id);
-            pstrcat(se->idstr, sizeof(se->idstr), "/");
-            g_free(id);
+            if (snprintf(se->idstr, sizeof(se->idstr), "%s/", id) >=
+                sizeof(se->idstr)) {
+                error_setg(errp, "Path too long for VMState (%s)", id);
+                g_free(id);
+                g_free(se);
+
+                return -1;
+            }
 
             se->compat = g_new0(CompatEntry, 1);
             pstrcpy(se->compat->idstr, sizeof(se->compat->idstr), vmsd->name);
@@ -1343,6 +1355,7 @@ static int loadvm_postcopy_handle_advise(MigrationIncomingState *mis)
     }
 
     if (!postcopy_ram_supported_by_host()) {
+        postcopy_state_set(POSTCOPY_INCOMING_NONE);
         return -1;
     }
 
@@ -2042,38 +2055,40 @@ int qemu_loadvm_state(QEMUFile *f)
     return ret;
 }
 
-void hmp_savevm(Monitor *mon, const QDict *qdict)
+int save_vmstate(Monitor *mon, const char *name)
 {
     BlockDriverState *bs, *bs1;
     QEMUSnapshotInfo sn1, *sn = &sn1, old_sn1, *old_sn = &old_sn1;
-    int ret;
+    int ret = -1;
     QEMUFile *f;
     int saved_vm_running;
     uint64_t vm_state_size;
     qemu_timeval tv;
     struct tm tm;
-    const char *name = qdict_get_try_str(qdict, "name");
     Error *local_err = NULL;
     AioContext *aio_context;
 
     if (!bdrv_all_can_snapshot(&bs)) {
         monitor_printf(mon, "Device '%s' is writable but does not "
                        "support snapshots.\n", bdrv_get_device_name(bs));
-        return;
+        return ret;
     }
 
     /* Delete old snapshots of the same name */
-    if (name && bdrv_all_delete_snapshot(name, &bs1, &local_err) < 0) {
-        error_reportf_err(local_err,
-                          "Error while deleting snapshot on device '%s': ",
-                          bdrv_get_device_name(bs1));
-        return;
+    if (name) {
+        ret = bdrv_all_delete_snapshot(name, &bs1, &local_err);
+        if (ret < 0) {
+            error_reportf_err(local_err,
+                              "Error while deleting snapshot on device '%s': ",
+                              bdrv_get_device_name(bs1));
+            return ret;
+        }
     }
 
     bs = bdrv_all_find_vmstate_bs();
     if (bs == NULL) {
         monitor_printf(mon, "No block device can accept snapshots\n");
-        return;
+        return ret;
     }
     aio_context = bdrv_get_aio_context(bs);
 
@@ -2082,7 +2097,7 @@ void hmp_savevm(Monitor *mon, const QDict *qdict)
     ret = global_state_store();
     if (ret) {
         monitor_printf(mon, "Error saving global state\n");
-        return;
+        return ret;
     }
     vm_stop(RUN_STATE_SAVE_VM);
 
@@ -2128,13 +2143,22 @@ void hmp_savevm(Monitor *mon, const QDict *qdict)
     if (ret < 0) {
         monitor_printf(mon, "Error while creating snapshot on '%s'\n",
                        bdrv_get_device_name(bs));
+        goto the_end;
     }
+
+    ret = 0;
 
  the_end:
     aio_context_release(aio_context);
     if (saved_vm_running) {
         vm_start();
     }
+    return ret;
+}
+
+void hmp_savevm(Monitor *mon, const QDict *qdict)
+{
+    save_vmstate(mon, qdict_get_try_str(qdict, "name"));
 }
 
 void qmp_xen_save_devices_state(const char *filename, Error **errp)
@@ -2188,7 +2212,6 @@ void qmp_xen_load_devices_state(const char *filename, Error **errp)
     qio_channel_set_name(QIO_CHANNEL(ioc), "migration-xen-load-state");
     f = qemu_fopen_channel_input(QIO_CHANNEL(ioc));
 
-    migration_incoming_state_new(f);
     ret = qemu_loadvm_state(f);
     qemu_fclose(f);
     if (ret < 0) {
@@ -2204,6 +2227,7 @@ int load_vmstate(const char *name)
     QEMUFile *f;
     int ret;
     AioContext *aio_context;
+    MigrationIncomingState *mis = migration_incoming_get_current();
 
     if (!bdrv_all_can_snapshot(&bs)) {
         error_report("Device '%s' is writable but does not support snapshots.",
@@ -2254,7 +2278,7 @@ int load_vmstate(const char *name)
     }
 
     qemu_system_reset(VMRESET_SILENT);
-    migration_incoming_state_new(f);
+    mis->from_src_file = f;
 
     aio_context_acquire(aio_context);
     ret = qemu_loadvm_state(f);

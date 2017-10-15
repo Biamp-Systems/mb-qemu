@@ -865,11 +865,14 @@
 #        side, this process is called COarse-Grain LOck Stepping (COLO) for
 #        Non-stop Service. (since 2.8)
 #
+# @release-ram: if enabled, qemu will free the migrated ram pages on the source
+#        during postcopy-ram migration. (since 2.9)
+#
 # Since: 1.2
 ##
 { 'enum': 'MigrationCapability',
   'data': ['xbzrle', 'rdma-pin-all', 'auto-converge', 'zero-blocks',
-           'compress', 'events', 'postcopy-ram', 'x-colo'] }
+           'compress', 'events', 'postcopy-ram', 'x-colo', 'release-ram'] }
 
 ##
 # @MigrationCapabilityStatus:
@@ -1190,10 +1193,12 @@
 #
 # @completed: finish the process of failover
 #
+# @relaunch: restart the failover process, from 'none' -> 'completed' (Since 2.9)
+#
 # Since: 2.8
 ##
 { 'enum': 'FailoverStatus',
-  'data': [ 'none', 'require', 'active', 'completed'] }
+  'data': [ 'none', 'require', 'active', 'completed', 'relaunch' ] }
 
 ##
 # @x-colo-lost-heartbeat:
@@ -1506,7 +1511,8 @@
 #
 # The network connection information for server
 #
-# @auth: #optional, authentication method
+# @auth: #optional authentication method used for
+#        the plain (non-websocket) VNC server
 #
 # Since: 2.1
 ##
@@ -1597,6 +1603,25 @@
             'tls-plain', 'x509-plain',
             'tls-sasl',  'x509-sasl' ] }
 
+
+##
+# @VncServerInfo2:
+#
+# The network connection information for server
+#
+# @auth: The current authentication type used by the servers
+#
+# @vencrypt: #optional The vencrypt sub authentication type used by the
+#            servers, only specified in case auth == vencrypt.
+#
+# Since: 2.9
+##
+{ 'struct': 'VncServerInfo2',
+  'base': 'VncBasicInfo',
+  'data': { 'auth'      : 'VncPrimaryAuth',
+            '*vencrypt' : 'VncVencryptSubAuth' } }
+
+
 ##
 # @VncInfo2:
 #
@@ -1612,9 +1637,9 @@
 # @clients: A list of @VncClientInfo of all currently connected clients.
 #           The list can be empty, for obvious reasons.
 #
-# @auth: The current authentication type used by the server
+# @auth: The current authentication type used by the non-websockets servers
 #
-# @vencrypt: #optional The vencrypt sub authentication type used by the server,
+# @vencrypt: #optional The vencrypt authentication type used by the servers,
 #            only specified in case auth == vencrypt.
 #
 # @display: #optional The display device the vnc server is linked to.
@@ -1623,7 +1648,7 @@
 ##
 { 'struct': 'VncInfo2',
   'data': { 'id'        : 'str',
-            'server'    : ['VncBasicInfo'],
+            'server'    : ['VncServerInfo2'],
             'clients'   : ['VncClientInfo'],
             'auth'      : 'VncPrimaryAuth',
             '*vencrypt' : 'VncVencryptSubAuth',
@@ -1694,7 +1719,7 @@
 #
 # Information about a SPICE server
 #
-# @auth: #optional, authentication method
+# @auth: #optional authentication method
 #
 # Since: 2.1
 ##
@@ -4865,7 +4890,7 @@
 #
 # Configuration info for the new chardev backend.
 #
-# Since: 1.4 (testdev since 2.2)
+# Since: 1.4 (testdev since 2.2, wctablet since 2.9)
 ##
 { 'union': 'ChardevBackend', 'data': { 'file'   : 'ChardevFile',
                                        'serial' : 'ChardevHostdev',
@@ -4877,6 +4902,7 @@
                                        'null'   : 'ChardevCommon',
                                        'mux'    : 'ChardevMux',
                                        'msmouse': 'ChardevCommon',
+                                       'wctablet' : 'ChardevCommon',
                                        'braille': 'ChardevCommon',
                                        'testdev': 'ChardevCommon',
                                        'stdio'  : 'ChardevStdio',
@@ -5390,10 +5416,15 @@
 #
 # Button of a pointer input device (mouse, tablet).
 #
+# @side: front side button of a 5-button mouse (since 2.9)
+#
+# @extra: rear side button of a 5-button mouse (since 2.9)
+#
 # Since: 2.0
 ##
 { 'enum'  : 'InputButton',
-  'data'  : [ 'left', 'middle', 'right', 'wheel-up', 'wheel-down' ] }
+  'data'  : [ 'left', 'middle', 'right', 'wheel-up', 'wheel-down', 'side',
+  'extra' ] }
 
 ##
 # @InputAxis:
@@ -5839,6 +5870,30 @@
 ##
 { 'enum': 'GuestPanicAction',
   'data': [ 'pause', 'poweroff' ] }
+
+##
+# @GuestPanicInformation:
+#
+# Information about a guest panic
+#
+# Since: 2.9
+##
+{'union': 'GuestPanicInformation',
+ 'data': { 'hyper-v': 'GuestPanicInformationHyperV' } }
+
+##
+# @GuestPanicInformationHyperV:
+#
+# Hyper-V specific guest panic information (HV crash MSRs)
+#
+# Since: 2.9
+##
+{'struct': 'GuestPanicInformationHyperV',
+ 'data': { 'arg1': 'uint64',
+           'arg2': 'uint64',
+           'arg3': 'uint64',
+           'arg4': 'uint64',
+           'arg5': 'uint64' } }
 
 ##
 # @rtc-reset-reinjection:

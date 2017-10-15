@@ -1250,7 +1250,7 @@ void memory_global_dirty_log_start(void);
  */
 void memory_global_dirty_log_stop(void);
 
-void mtree_info(fprintf_function mon_printf, void *f);
+void mtree_info(fprintf_function mon_printf, void *f, bool flatview);
 
 /**
  * memory_region_dispatch_read: perform a read directly to the specified
@@ -1425,6 +1425,8 @@ struct MemoryRegionCache {
     MemoryRegion *mr;
     bool is_write;
 };
+
+#define MEMORY_REGION_CACHE_INVALID ((MemoryRegionCache) { .mr = NULL })
 
 /* address_space_cache_init: prepare for repeated access to a physical
  * memory region

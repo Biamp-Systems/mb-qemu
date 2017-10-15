@@ -1214,6 +1214,10 @@ struct X86CPU {
     bool host_features;
     uint32_t apic_id;
 
+    /* Enables publishing of TSC increment and Local APIC bus frequencies to
+     * the guest OS in CPUID page 0x40000010, the same way that VMWare does. */
+    bool vmware_cpuid_freq;
+
     /* if true the CPUID code directly forward host cache leaves to the guest */
     bool cache_info_passthrough;
 
@@ -1617,8 +1621,9 @@ void helper_lock_init(void);
 
 /* svm_helper.c */
 void cpu_svm_check_intercept_param(CPUX86State *env1, uint32_t type,
-                                   uint64_t param);
-void cpu_vmexit(CPUX86State *nenv, uint32_t exit_code, uint64_t exit_info_1);
+                                   uint64_t param, uintptr_t retaddr);
+void cpu_vmexit(CPUX86State *nenv, uint32_t exit_code, uint64_t exit_info_1,
+                uintptr_t retaddr);
 
 /* seg_helper.c */
 void do_interrupt_x86_hardirq(CPUX86State *env, int intno, int is_hw);

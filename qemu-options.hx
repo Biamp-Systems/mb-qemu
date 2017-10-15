@@ -1066,7 +1066,7 @@ DEF("spice", HAS_ARG, QEMU_OPTION_spice,
     "       [,streaming-video=[off|all|filter]][,disable-copy-paste]\n"
     "       [,disable-agent-file-xfer][,agent-mouse=[on|off]]\n"
     "       [,playback-compression=[on|off]][,seamless-migration=[on|off]]\n"
-    "       [,gl=[on|off]]\n"
+    "       [,gl=[on|off]][,rendernode=<file>]\n"
     "   enable spice\n"
     "   at least one of {port, tls-port} is mandatory\n",
     QEMU_ARCH_ALL)
@@ -1161,6 +1161,10 @@ Enable/disable spice seamless migration. Default is off.
 @item gl=[on|off]
 Enable/disable OpenGL context. Default is off.
 
+@item rendernode=<file>
+DRM render node for OpenGL rendering. If not specified, it will pick
+the first available. (Since 2.9)
+
 @end table
 ETEXI
 
@@ -1194,12 +1198,12 @@ Select type of VGA card to emulate. Valid values for @var{type} are
 Cirrus Logic GD5446 Video card. All Windows versions starting from
 Windows 95 should recognize and use this graphic card. For optimal
 performances, use 16 bit color depth in the guest and the host OS.
-(This one is the default)
+(This card was the default before QEMU 2.2)
 @item std
 Standard VGA card with Bochs VBE extensions.  If your guest OS
 supports the VESA 2.0 VBE extensions (e.g. Windows XP) and if you want
 to use high resolution modes (>= 1280x1024x16) then you should use
-this option.
+this option. (This card is the default since QEMU 2.2)
 @item vmware
 VMWare SVGA-II compatible adapter. Use it if you have sufficiently
 recent XFree86/XOrg server or Windows guest with a driver for this
@@ -1296,10 +1300,14 @@ is a TCP port number, not a display number.
 @item websocket
 
 Opens an additional TCP listening port dedicated to VNC Websocket connections.
-By definition the Websocket port is 5700+@var{display}. If @var{host} is
-specified connections will only be allowed from this host.
-As an alternative the Websocket port could be specified by using
-@code{websocket}=@var{port}.
+If a bare @var{websocket} option is given, the Websocket port is
+5700+@var{display}. An alternative port can be specified with the
+syntax @code{websocket}=@var{port}.
+
+If @var{host} is specified connections will only be allowed from this host.
+It is possible to control the websocket listen address independently, using
+the syntax @code{websocket}=@var{host}:@var{port}.
+
 If no TLS credentials are provided, the websocket connection runs in
 unencrypted mode. If TLS credentials are provided, the websocket connection
 requires encrypted client connections.
@@ -2430,8 +2438,6 @@ Connect to standard input and standard output of the QEMU process.
 exiting QEMU with the key sequence @key{Control-c}. This option is enabled by
 default, use @option{signal=off} to disable it.
 
-@option{stdio} is not available on Windows hosts.
-
 @item -chardev braille ,id=@var{id}
 
 Connect to a local BrlAPI server. @option{braille} does not take any options.
@@ -3017,7 +3023,7 @@ udp::4555@@:4556} to QEMU. Another approach is to use a patched
 version of netcat which can listen to a TCP port and send and receive
 characters via udp.  If you have a patched version of netcat which
 activates telnet remote echo and single char transfer, then you can
-use the following options to step up a netcat redirector to allow
+use the following options to set up a netcat redirector to allow
 telnet on port 5555 to access the QEMU port.
 @table @code
 @item QEMU Options:
@@ -3400,12 +3406,12 @@ re-inject them.
 ETEXI
 
 DEF("icount", HAS_ARG, QEMU_OPTION_icount, \
-    "-icount [shift=N|auto][,align=on|off][,sleep=on|off,rr=record|replay,rrfile=<filename>]\n" \
+    "-icount [shift=N|auto][,align=on|off][,sleep=on|off,rr=record|replay,rrfile=<filename>,rrsnapshot=<snapshot>]\n" \
     "                enable virtual instruction counter with 2^N clock ticks per\n" \
     "                instruction, enable aligning the host and virtual clocks\n" \
     "                or disable real time cpu sleeping\n", QEMU_ARCH_ALL)
 STEXI
-@item -icount [shift=@var{N}|auto][,rr=record|replay,rrfile=@var{filename}]
+@item -icount [shift=@var{N}|auto][,rr=record|replay,rrfile=@var{filename},rrsnapshot=@var{snapshot}]
 @findex -icount
 Enable virtual instruction counter.  The virtual cpu will execute one
 instruction every 2^@var{N} ns of virtual time.  If @code{auto} is specified
@@ -3438,6 +3444,10 @@ when the shift value is high (how high depends on the host machine).
 When @option{rr} option is specified deterministic record/replay is enabled.
 Replay log is written into @var{filename} file in record mode and
 read from this file in replay mode.
+
+Option rrsnapshot is used to create new vm snapshot named @var{snapshot}
+at the start of execution recording. In replay mode this option is used
+to load the initial VM state.
 ETEXI
 
 DEF("watchdog", HAS_ARG, QEMU_OPTION_watchdog, \

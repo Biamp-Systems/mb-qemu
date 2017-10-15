@@ -44,7 +44,7 @@
 #include "sysemu/dma.h"
 #include "exec/address-spaces.h"
 #include "sysemu/xen-mapcache.h"
-#include "trace.h"
+#include "trace-root.h"
 #endif
 #include "exec/cpu-all.h"
 #include "qemu/rcu_queue.h"
@@ -2115,6 +2115,7 @@ static void check_watchpoint(int offset, int len, MemTxAttrs attrs, int flags)
         return;
     }
     vaddr = (cpu->mem_io_vaddr & TARGET_PAGE_MASK) + offset;
+    vaddr = cc->adjust_watchpoint_address(cpu, vaddr, len);
     QTAILQ_FOREACH(wp, &cpu->watchpoints, entry) {
         if (cpu_watchpoint_address_matches(wp, vaddr, len)
             && (wp->flags & flags)) {
@@ -2630,7 +2631,7 @@ static MemTxResult address_space_write_continue(AddressSpace *as, hwaddr addr,
                 break;
             case 4:
                 /* 32 bit write access */
-                val = ldl_p(buf);
+                val = (uint32_t)ldl_p(buf);
                 result |= memory_region_dispatch_write(mr, addr1, val, 4,
                                                        attrs);
                 break;
@@ -3171,6 +3172,7 @@ void address_space_cache_destroy(MemoryRegionCache *cache)
         xen_invalidate_map_cache_entry(cache->ptr);
     }
     memory_region_unref(cache->mr);
+    cache->mr = NULL;
 }
 
 /* Called from RCU critical section.  This function has the same
