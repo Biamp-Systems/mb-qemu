@@ -466,10 +466,9 @@ void qdev_init_gpio_out(DeviceState *dev, qemu_irq *pins, int n)
 
 qemu_irq qdev_get_gpio_in_named(DeviceState *dev, const char *name, int n)
 {
-    NamedGPIOList *gpio_list = qdev_get_named_gpio_list(dev, name);
-
-    assert(n >= 0 && n < gpio_list->num_in);
-    return gpio_list->in[n];
+    char *propname = g_strdup_printf("%s[%d]",
+                                     name ? name : "unnamed-gpio-in", n);
+    return (qemu_irq)object_property_get_link(OBJECT(dev), propname, NULL);
 }
 
 qemu_irq qdev_get_gpio_in(DeviceState *dev, int n)

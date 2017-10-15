@@ -26,6 +26,7 @@
 #include "hw/loader.h"
 #include "hw/boards.h"
 #include "qemu/config-file.h"
+#include "qemu/log.h"
 
 #include <libfdt.h>
 
@@ -77,7 +78,9 @@ void *load_device_tree(const char *filename_path, int *sizep)
     int ret;
     void *fdt = NULL;
 
-    *sizep = 0;
+    if (sizep) {
+        *sizep = 0;
+    }
     dt_size = get_image_size(filename_path);
     if (dt_size < 0) {
         error_report("Unable to get size of device tree file '%s'",
@@ -110,7 +113,9 @@ void *load_device_tree(const char *filename_path, int *sizep)
                      filename_path);
         goto fail;
     }
-    *sizep = dt_size;
+    if (sizep) {
+        *sizep = dt_size;
+    }
     return fdt;
 
 fail:
@@ -148,6 +153,7 @@ static void read_fstree(void *fdt, const char *dirname)
     d = opendir(dirname);
     if (!d) {
         error_setg(&error_fatal, "%s cannot open %s", __func__, dirname);
+        return;
     }
 
     while ((de = readdir(d)) != NULL) {
@@ -353,8 +359,48 @@ const void *qemu_fdt_getprop(void *fdt, const char *node_path,
         }
         error_setg(errp, "%s: Couldn't get %s/%s: %s", __func__,
                   node_path, property, fdt_strerror(*lenp));
+        return NULL;
     }
     return g_memdup(r, *lenp);
+}
+
+char *qemu_fdt_getprop_string(void *fdt, const char*node_path,
+                              const char *property, int cell,
+                              bool inherit, Error **errp)
+{
+    int len;
+    void *prop;
+    Error *err= NULL;
+
+    if (!errp) {
+        errp = &err;
+    }
+
+    prop = qemu_fdt_getprop(fdt, node_path, property, &len, inherit, errp);
+    if (*errp) {
+        return NULL;
+    }
+    while (cell) {
+        void *term = memchr(prop, '\0', len);
+        size_t diff;
+
+        if (!term) {
+            error_setg(errp, "%s: Couldn't get %s/%s: %s", __func__,
+                      node_path, property, fdt_strerror(len));
+            return NULL;
+        }
+        diff = term - prop + 1;
+        len -= diff;
+        assert(len >= 0);
+        prop += diff;
+        cell--;
+    }
+    if (!*(char *)prop) {
+        error_setg(errp, "%s: Couldn't get %s/%s: %s", __func__,
+                  node_path, property, fdt_strerror(len));
+        return NULL;
+    }
+    return len ? prop : NULL;
 }
 
 uint32_t qemu_fdt_getprop_cell(void *fdt, const char *node_path,
@@ -383,6 +429,35 @@ uint32_t qemu_fdt_getprop_cell(void *fdt, const char *node_path,
     ret = be32_to_cpu(p[offset]);
     g_free(p);
     return ret;
+}
+
+uint64_t qemu_fdt_getprop_sized_cell(void *fdt, const char *node_path,
+                                     const char *property, int offset,
+                                     int size, Error **errp)
+{
+    uint64_t ret = 0;
+    for (;size ;size--) {
+        ret <<= 32;
+        ret |= qemu_fdt_getprop_cell(fdt, node_path, property, NULL,
+			             offset++, false, errp);
+        if (errp && *errp) {
+            return 0;
+        }
+    }
+    return ret;
+}
+
+uint32_t qemu_fdt_check_phandle(void *fdt, const char *path)
+{
+    uint32_t r;
+
+    r = fdt_get_phandle(fdt, findnode_nofail(fdt, path));
+    if (r == 0) {
+        qemu_log("%s: Couldn't find phandle for %s: %s", __func__,
+                 path, fdt_strerror(r));
+    }
+
+    return r;
 }
 
 uint32_t qemu_fdt_get_phandle(void *fdt, const char *path)
@@ -485,13 +560,49 @@ int qemu_fdt_get_node_depth(void *fdt, const char *node_path)
     return fdt_node_depth(fdt, fdt_path_offset(fdt, node_path));
 }
 
+int qemu_fdt_num_props(void *fdt, const char *node_path)
+{
+    int offset = fdt_path_offset(fdt, node_path);
+    int ret = 0;
+
+    for (offset = fdt_first_property_offset(fdt, offset);
+            offset != -FDT_ERR_NOTFOUND;
+            offset = fdt_next_property_offset(fdt, offset)) {
+        ret++;
+    }
+    return ret;
+}
+
+QEMUDevtreeProp *qemu_fdt_get_props(void *fdt, const char *node_path)
+{
+    QEMUDevtreeProp *ret = g_new0(QEMUDevtreeProp,
+                                  qemu_fdt_num_props(fdt, node_path) + 1);
+    int offset = fdt_path_offset(fdt, node_path);
+    int i = 0;
+
+    for (offset = fdt_first_property_offset(fdt, offset);
+            offset != -FDT_ERR_NOTFOUND;
+            offset = fdt_next_property_offset(fdt, offset)) {
+        const char *propname;
+        const void *val = fdt_getprop_by_offset(fdt, offset, &propname,
+                                                    &ret[i].len);
+
+        ret[i].name = g_strdup(propname);
+        ret[i].value = g_memdup(val, ret[i].len);
+        i++;
+    }
+    return ret;
+}
+
 static void qemu_fdt_children_info(void *fdt, const char *node_path,
         int depth, int *num, char **returned_paths) {
     int offset = fdt_path_offset(fdt, node_path);
     int root_depth = fdt_node_depth(fdt, offset);
     int cur_depth = root_depth;
 
-    *num = 0;
+    if (num) {
+        *num = 0;
+    }
     for (;;) {
         offset = fdt_next_node(fdt, offset, &cur_depth);
         if (cur_depth <= root_depth) {
@@ -502,7 +613,9 @@ static void qemu_fdt_children_info(void *fdt, const char *node_path,
                 returned_paths[*num] = g_malloc0(DT_PATH_LENGTH);
                 fdt_get_path(fdt, offset, returned_paths[*num], DT_PATH_LENGTH);
             }
-            (*num)++;
+            if (num) {
+                (*num)++;
+            }
         }
     }
 }
@@ -538,12 +651,15 @@ int qemu_fdt_get_node_by_name(void *fdt, char *node_path,
     char *name = NULL;
 
     do {
+        char *at;
+
         offset = fdt_next_node(fdt, offset, NULL);
         name = (void *)fdt_get_name(fdt, offset, NULL);
         if (!name) {
             continue;
         }
-        if (!strncmp(name, cmpname, strlen(cmpname))) {
+        at = memchr(name, '@', strlen(name));
+        if (!strncmp(name, cmpname, at ? at - name : strlen(name) )) {
             break;
         }
     } while (offset > 0);

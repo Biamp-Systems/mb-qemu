@@ -25,48 +25,178 @@
  * THE SOFTWARE.
  */
 
-/* #define FDT_GENERIC_UTIL_ERR_DEBUG */
-
-#ifdef FDT_GENERIC_UTIL_ERR_DEBUG
-#define DB_PRINT(...) do { \
-    fprintf(stderr,  ": %s: ", __func__); \
-    fprintf(stderr, ## __VA_ARGS__); \
-    } while (0);
-#else
-    #define DB_PRINT(...)
-#endif
-
 #include "hw/fdt_generic_util.h"
+#include "hw/fdt_generic_devices.h"
 #include "net/net.h"
 #include "block/block.h"
 #include "qapi/error.h"
+#include "sysemu/sysemu.h"
+#include "sysemu/blockdev.h"
+#include "qemu/log.h"
+#include "qemu/config-file.h"
+#include "qom/cpu.h"
+
+#ifndef FDT_GENERIC_UTIL_ERR_DEBUG
+#define FDT_GENERIC_UTIL_ERR_DEBUG 3
+#endif
+#define DB_PRINT(lvl, ...) do { \
+    if (FDT_GENERIC_UTIL_ERR_DEBUG > (lvl)) { \
+        qemu_log_mask(LOG_FDT, ": %s: ", __func__); \
+        qemu_log_mask(LOG_FDT, ## __VA_ARGS__); \
+    } \
+} while (0);
+
+#define DB_PRINT_NP(lvl, ...) do { \
+    if (FDT_GENERIC_UTIL_ERR_DEBUG > (lvl)) { \
+       qemu_log_mask(LOG_FDT, "%s", node_path); \
+       DB_PRINT((lvl), ## __VA_ARGS__); \
+    } \
+} while (0);
+
 
 /* FIXME: wrap direct calls into libfdt */
 
 #include <libfdt.h>
 
-FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq cpu_irq)
+int fdt_serial_ports;
+
+static void fdt_get_irq_info_from_intc(FDTMachineInfo *fdti, qemu_irq *ret,
+                                       char *intc_node_path,
+                                       uint32_t *cells, uint32_t num_cells,
+                                       uint32_t max, Error **errp);
+
+
+typedef struct QEMUIRQSharedState {
+    qemu_irq sink;
+    int num;
+    bool (*merge_fn)(bool *, int);
+/* FIXME: remove artificial limit */
+#define MAX_IRQ_SHARED_INPUTS 128
+    bool inputs[MAX_IRQ_SHARED_INPUTS];
+} QEMUIRQSharedState;
+
+static bool qemu_irq_shared_or_handler(bool *inputs, int n)
+{
+    int i;
+
+    assert(n < MAX_IRQ_SHARED_INPUTS);
+
+    for (i = 0; i < n; ++i) {
+        if (inputs[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool qemu_irq_shared_and_handler(bool *inputs, int n)
+{
+    int i;
+
+    assert(n < MAX_IRQ_SHARED_INPUTS);
+
+    for (i = 0; i < n; ++i) {
+        if (!inputs[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void qemu_irq_shared_handler(void *opaque, int n, int level)
+{
+    QEMUIRQSharedState *s = opaque;
+
+    assert(n < MAX_IRQ_SHARED_INPUTS);
+    s->inputs[n] = level;
+    qemu_set_irq(s->sink, s->merge_fn(s->inputs, s->num));
+}
+
+static void fdt_init_all_irqs(FDTMachineInfo *fdti)
+{
+    while (fdti->irqs) {
+        FDTIRQConnection *first = fdti->irqs;
+        qemu_irq sink = first->irq;
+        bool (*merge_fn)(bool *, int) = first->merge_fn;
+        int num_sources = 0;
+        FDTIRQConnection *irq;
+
+        for (irq = first; irq; irq = irq->next) {
+            if (irq->irq == sink) { /* Same sink */
+                num_sources++;
+            }
+        }
+        if (num_sources > 1) {
+            QEMUIRQSharedState *s = g_malloc0(sizeof *s);
+            s->sink = sink;
+            s->merge_fn = merge_fn;
+            qemu_irq *sources = qemu_allocate_irqs(qemu_irq_shared_handler, s,
+                                                   num_sources);
+            for (irq = first; irq; irq = irq->next) {
+                if (irq->irq == sink) {
+                    char *shared_irq_name = g_strdup_printf("shared-irq-%p",
+                                                            *sources);
+
+                    if (irq->merge_fn != merge_fn) {
+                        fprintf(stderr, "ERROR: inconsistent IRQ merge fns\n");
+                        exit(1);
+                    }
+
+                    object_property_add_child(OBJECT(irq->dev), shared_irq_name,
+                                              OBJECT(*sources), &error_abort);
+                    g_free(shared_irq_name);
+                    irq->irq = *(sources++);
+                    s->num++;
+                }
+            }
+        }
+        DB_PRINT(0, "%s: connected to %s irq line %d (%s)\n",
+                 first->sink_info ? first->sink_info : "",
+                 object_get_canonical_path(OBJECT(first->dev)),
+                 first->i, first->name ? first->name : "");
+
+        qdev_connect_gpio_out_named(DEVICE(first->dev), first->name, first->i,
+                                    first->irq);
+        fdti->irqs = first->next;
+        g_free(first);
+    }
+}
+
+FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
 {
     char node_path[DT_PATH_LENGTH];
-
+    QemuOpts *opts = qemu_opts_find(qemu_find_opts("smp-opts"), NULL);
     FDTMachineInfo *fdti = fdt_init_new_fdti(fdt);
 
     fdti->irq_base = cpu_irq;
+
+    fdt_serial_ports = 0;
 
     /* bind any force bound instances */
     fdt_force_bind_all(fdti);
 
     /* parse the device tree */
     if (!qemu_fdt_get_root_node(fdt, node_path)) {
+        memory_region_transaction_begin();
+        fdt_init_set_opaque(fdti, node_path, NULL);
         simple_bus_fdt_init(node_path, fdti, NULL);
         while (qemu_co_enter_next(fdti->cq));
+        fdt_init_all_irqs(fdti);
+        memory_region_transaction_commit();
     } else {
         fprintf(stderr, "FDT: ERROR: cannot get root node from device tree %s\n"
             , node_path);
     }
 
-    DB_PRINT("FDT: Device tree scan complete\n");
-    FDTMachineInfo *ret = g_malloc0(sizeof(*ret));
+    DB_PRINT(0, "FDT: Device tree scan complete\n");
+
+    /* Set the number of CPUs */
+    if (!qemu_opt_get_number(opts, "cpus", 0)) {
+        smp_cpus = fdt_generic_num_cpus;
+    }
+
+    DB_PRINT(0, "The value of smp_cpus is: %d\n", smp_cpus);
+
     return fdti;
 }
 
@@ -92,14 +222,16 @@ static void fdt_init_node(void *args)
     static int entry_index;
     int this_entry = entry_index++;
 #endif
-    DB_PRINT("enter %d %s\n", this_entry, node_path);
+    DB_PRINT_NP(1, "enter\n");
 
     /* try instance binding first */
     node_name = qemu_fdt_get_node_name(fdti->fdt, node_path);
+    DB_PRINT_NP(1, "node with name: %s\n", node_name ? node_name : "(none)");
     if (!node_name) {
         fprintf(stderr, "FDT: ERROR: nameless node: %s\n", node_path);
     }
     if (!fdt_init_inst_bind(node_path, fdti, node_name)) {
+        DB_PRINT_NP(0, "instance bind successful\n");
         goto exit;
     }
 
@@ -109,7 +241,7 @@ static void fdt_init_node(void *args)
     if (!all_compats) {
         fprintf(stderr, "FDT: ERROR: no compatibility found for node %s/%s\n", node_path,
             node_name);
-        DB_PRINT("exit %d\n", this_entry);
+        DB_PRINT(1, "exit %d\n", this_entry);
         fdti->routinesPending--;
         return;
     }
@@ -133,13 +265,12 @@ try_next_compat:
     compat = next_compat+1;
     goto try_next_compat;
 invalidate:
-    fprintf(stderr, "FDT: Unsupported peripheral invalidated %s compatibilities %s\n",
-        node_name, all_compats);
-    qemu_fdt_setprop_string(fdti->fdt, node_path, "compatible",
-        "invalidated");
+    DB_PRINT_NP(0, "FDT: Unsupported peripheral invalidated - "
+                "compatibilities %s\n", all_compats);
+    qemu_fdt_setprop_string(fdti->fdt, node_path, "compatible", "invalidated");
 exit:
 
-    DB_PRINT("exit %d\n", this_entry);
+    DB_PRINT_NP(1, "exit\n");
 
     if (!fdt_init_has_opaque(fdti, node_path)) {
         fdt_init_set_opaque(fdti, node_path, NULL);
@@ -150,14 +281,14 @@ exit:
     return;
 }
 
-int simple_bus_fdt_init(char *bus_node_path, FDTMachineInfo *fdti, void *unused)
+int simple_bus_fdt_init(char *node_path, FDTMachineInfo *fdti, void *unused)
 {
     int i;
-    int num_children = qemu_fdt_get_num_children(fdti->fdt, bus_node_path, 1);
-    char **children = qemu_fdt_get_children(fdti->fdt, bus_node_path, 1);
+    int num_children = qemu_fdt_get_num_children(fdti->fdt, node_path, 1);
+    char **children = qemu_fdt_get_children(fdti->fdt, node_path, 1);
     int initialRoutinesPending = fdti->routinesPending;
 
-    DB_PRINT("num child devices: %d\n", num_children);
+    DB_PRINT_NP(num_children ? 0 : 1, "num child devices: %d\n", num_children);
 
     for (i = 0; i < num_children; i++) {
         struct FDTInitNodeArgs *init_args = g_malloc0(sizeof(*init_args));
@@ -175,63 +306,423 @@ int simple_bus_fdt_init(char *bus_node_path, FDTMachineInfo *fdti, void *unused)
     return 0;
 }
 
-qemu_irq fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
-        int *err, char *info) {
+static qemu_irq fdt_get_gpio(FDTMachineInfo *fdti, char *node_path,
+                             int* cur_cell, qemu_irq input,
+                             const FDTGenericGPIOSet *gpio_set,
+                             const char *debug_success, bool *end) {
     void *fdt = fdti->fdt;
-    int intc_phandle, intc_cells, idx, errl;
-    char intc_node_path[DT_PATH_LENGTH];
+    uint32_t parent_phandle, parent_cells = 0, cells[32];
+    char parent_node_path[DT_PATH_LENGTH];
+    DeviceState *parent;
+    int i;
     Error *errp = NULL;
+    const char *reason;
+    bool free_reason = false;
+    const char *propname = gpio_set->names->propname;
+    const char *cells_propname = gpio_set->names->cells_propname;
+
+    cells[0] = 0;
+
+    parent_phandle = qemu_fdt_getprop_cell(fdt, node_path, propname, NULL,
+                                           (*cur_cell)++, false, &errp);
+    if (errp) {
+        reason = g_strdup_printf("Cant get phandle from \"%s\" property\n",
+                                 propname);
+        *end = true;
+        free_reason = true;
+        goto fail_silent;
+    }
+    if (qemu_fdt_get_node_by_phandle(fdt, parent_node_path, parent_phandle)) {
+        *end = true;
+        reason = "cant get node from phandle\n";
+        goto fail;
+    }
+    parent_cells = qemu_fdt_getprop_cell(fdt, parent_node_path, cells_propname,
+		                         NULL, 0, false, &errp);
+    if (errp) {
+        *end = true;
+        reason = g_strdup_printf("cant get the property \"%s\" from the " \
+                                 "parent \"%s\"\n",
+                                 cells_propname, parent_node_path);
+        free_reason = true;
+        goto fail;
+    }
+
+    for (i = 0; i < parent_cells; ++i) {
+        cells[i] = qemu_fdt_getprop_cell(fdt, node_path, propname, NULL,
+                                         (*cur_cell)++, false, &errp);
+        if (errp) {
+            *end = true;
+            reason = "cant get cell value";
+            goto fail;
+        }
+    }
+
+    while (!fdt_init_has_opaque(fdti, parent_node_path)) {
+        fdt_init_yield(fdti);
+    }
+    parent = DEVICE(fdt_init_get_opaque(fdti, parent_node_path));
+
+    if (!parent) {
+        reason = "parent is not a device";
+        goto fail_silent;
+    }
+
+    while (!parent->realized) {
+        fdt_init_yield(fdti);
+    }
+
+    {
+        const FDTGenericGPIOConnection *fgg_con = NULL;
+        uint16_t range, idx;
+        const char *gpio_name = NULL;
+        qemu_irq ret;
+
+        if (object_dynamic_cast(OBJECT(parent), TYPE_FDT_GENERIC_GPIO)) {
+            const FDTGenericGPIOSet *set;
+            FDTGenericGPIOClass *parent_fggc =
+                        FDT_GENERIC_GPIO_GET_CLASS(parent);
+
+            for (set = parent_fggc->controller_gpios; set && set->names;
+                 set++) {
+                if (!strcmp(gpio_set->names->cells_propname,
+                            set->names->cells_propname)) {
+                    fgg_con = set->gpios;
+                    break;
+                }
+            }
+        }
+
+        /* FIXME: cells[0] is not always the fdt indexing match system */
+        idx = cells[0] & ~(1ul << 31);
+        if (fgg_con) {
+            range = fgg_con->range ? fgg_con->range : 1;
+            while (!(idx >= fgg_con->fdt_index
+                     && idx < (fgg_con->fdt_index + range))
+                   && fgg_con->name) {
+                fgg_con++;
+            }
+            if (!fgg_con) {
+                goto fail;
+            }
+
+            idx -= fgg_con->fdt_index;
+            gpio_name = fgg_con->name;
+        }
+
+        if (input) {
+            FDTIRQConnection *irq = g_new0(FDTIRQConnection, 1);
+            bool (*merge_fn)(bool *, int) = qemu_irq_shared_or_handler;
+
+            /* FIXME: I am kind of stealing here. Use the msb of the first
+             * cell to indicate the merge function. This needs to be discussed
+             * with device-tree community on how this should be done properly.
+             */
+            if (cells[0] & (1 << 31)) {
+                merge_fn = qemu_irq_shared_and_handler;
+            }
+
+            DB_PRINT_NP(1, "%s GPIO output %s[%d] on %s\n", debug_success,
+                        gpio_name ? gpio_name : "unnamed", idx,
+                        parent_node_path);
+            *irq = (FDTIRQConnection) {
+                .dev = parent,
+                .name = gpio_name,
+                .merge_fn = merge_fn,
+                .i = idx,
+                .irq = input,
+                .sink_info = NULL, /* FIMXE */
+                .next = fdti->irqs
+            };
+            fdti->irqs = irq;
+        }
+
+        if (!strcmp(propname, "interrupts-extended") &&
+            object_dynamic_cast(OBJECT(parent), TYPE_FDT_GENERIC_INTC) &&
+            parent_cells > 1) {
+            qemu_irq *irqs = g_new0(qemu_irq, fdt_generic_num_cpus);
+            int i;
+
+            fdt_get_irq_info_from_intc(fdti, irqs, parent_node_path, cells,
+                                    parent_cells, fdt_generic_num_cpus, &errp);
+            if (errp) {
+                reason = "failed to create gpio connection";
+                goto fail;
+            }
+
+            ret = NULL;
+            for (i = 0; i < fdt_generic_num_cpus; i++) {
+                if (irqs[i]) {
+                    ret = irqs[i];
+                    break;
+                }
+            }
+            g_free(irqs);
+        } else {
+            ret = qdev_get_gpio_in_named(parent, gpio_name, idx);
+        }
+
+        if (ret) {
+            DB_PRINT_NP(1, "wiring GPIO input %s on %s ...\n",
+                        fgg_con ? fgg_con->name : "unnamed", parent_node_path);
+        }
+        return ret;
+    }
+fail:
+    fprintf(stderr, "%s Failed: %s\n", node_path, reason);
+fail_silent:
+    if (free_reason) {
+        g_free((void *)reason);
+    }
+    return NULL;
+}
+
+static void fdt_get_irq_info_from_intc(FDTMachineInfo *fdti, qemu_irq *ret,
+                                       char *intc_node_path,
+                                       uint32_t *cells, uint32_t num_cells,
+                                       uint32_t max, Error **errp)
+{
+    FDTGenericIntcClass *intc_fdt_class;
     DeviceState *intc;
-
-    if (!err) {
-        err = &errl;
-    }
-    intc_phandle = qemu_fdt_getprop_cell(fdt, node_path, "interrupt-parent",
-                                         NULL, 0, true, &errp);
-    if (errp) {
-        goto fail;
-    }
-
-    if (qemu_fdt_get_node_by_phandle(fdt, intc_node_path, intc_phandle)) {
-        goto fail;
-    }
-    intc_cells = qemu_fdt_getprop_cell(fdt, intc_node_path,
-                                       "#interrupt-cells", NULL, 0, false,
-				       &errp);
-    if (errp) {
-        goto fail;
-    }
-    idx = qemu_fdt_getprop_cell(fdt, node_path, "interrupts", NULL,
-                                intc_cells * irq_idx, false, &errp);
-    if (errp) {
-        goto fail;
-    }
 
     while (!fdt_init_has_opaque(fdti, intc_node_path)) {
         fdt_init_yield(fdti);
     }
     intc = DEVICE(fdt_init_get_opaque(fdti, intc_node_path));
+
     if (!intc) {
         goto fail;
     }
-    if (info) {
-        char *node_name = qemu_fdt_get_node_name(fdt, intc_node_path);
-        sprintf(info, "%d (%s)", idx, node_name);
-        g_free((void *)node_name);
+
+    while (!intc->realized) {
+        fdt_init_yield(fdti);
     }
-    *err = 0;
-    return qdev_get_gpio_in(intc, idx);
+
+    intc_fdt_class = FDT_GENERIC_INTC_GET_CLASS(intc);
+    if (!intc_fdt_class) {
+        goto fail;
+    }
+
+    intc_fdt_class->get_irq(FDT_GENERIC_INTC(intc), ret, cells, num_cells,
+                            max, errp);
+
+    return;
 fail:
-    *err = 1;
+    error_setg(errp, "%s", __func__);
+}
+
+static uint32_t imap_cache[4096];
+static bool imap_cached = false;
+
+qemu_irq *fdt_get_irq_info(FDTMachineInfo *fdti, char *node_path, int irq_idx,
+                          char *info, bool *map_mode) {
+    void *fdt = fdti->fdt;
+    uint32_t intc_phandle, intc_cells, cells[32];
+    char intc_node_path[DT_PATH_LENGTH];
+    qemu_irq *ret = NULL;
+    int i;
+    Error *errp = NULL;
+
+    intc_phandle = qemu_fdt_getprop_cell(fdt, node_path, "interrupt-parent",
+                                         NULL, 0, true, &errp);
+    if (errp) {
+        errp = NULL;
+        intc_cells = qemu_fdt_getprop_cell(fdt, node_path, "#interrupt-cells",
+                                           NULL, 0, true, &errp);
+        *map_mode = true;
+    } else {
+        if (qemu_fdt_get_node_by_phandle(fdt, intc_node_path,
+                                             intc_phandle)) {
+            goto fail;
+        }
+
+        /* Check if the device is using interrupt-maps */
+        qemu_fdt_getprop_cell(fdt, node_path, "interrupt-map-mask", NULL, 0,
+                              false, &errp);
+        if (!errp) {
+            errp = NULL;
+            intc_cells = qemu_fdt_getprop_cell(fdt, node_path,
+                                               "#interrupt-cells", NULL, 0,
+                                               true, &errp);
+            *map_mode = true;
+        } else {
+            errp = NULL;
+            intc_cells = qemu_fdt_getprop_cell(fdt, intc_node_path,
+                                               "#interrupt-cells", NULL, 0,
+                                               true, &errp);
+            *map_mode = false;
+        }
+    }
+
+    if (errp) {
+        goto fail;
+    }
+
+    DB_PRINT_NP(2, "%s intc_phandle: %d\n", node_path, intc_phandle);
+
+    for (i = 0; i < intc_cells; ++i) {
+        cells[i] = qemu_fdt_getprop_cell(fdt, node_path, "interrupts", NULL,
+                                         intc_cells * irq_idx + i, false, &errp);
+        if (errp) {
+            goto fail;
+        }
+    }
+
+    if (*map_mode) {
+        int k;
+        ret = g_new0(qemu_irq, 1);
+        int num_matches = 0;
+        int len;
+        uint32_t imap_mask[intc_cells];
+        uint32_t *imap_p;
+        uint32_t *imap;
+        bool use_parent = false;
+
+        for (k = 0; k < intc_cells; ++k) {
+            imap_mask[k] = qemu_fdt_getprop_cell(fdt, node_path,
+                                                 "interrupt-map-mask", NULL,
+                                                 k + 2, true, &errp);
+            if (errp) {
+                goto fail;
+            }
+        }
+
+        /* Check if the device has an interrupt-map property */
+        imap = qemu_fdt_getprop(fdt, node_path, "interrupt-map", &len,
+                                  use_parent, &errp);
+
+        if (!imap || errp) {
+            /* If the device doesn't have an interrupt-map, try again with
+             * inheritance. This will return the parents interrupt-map
+             */
+            use_parent = true;
+            errp = NULL;
+
+            imap_p = qemu_fdt_getprop(fdt, node_path, "interrupt-map",
+                                      &len, use_parent, &errp);
+            if (!imap_cached) {
+                memcpy(imap_cache, imap_p, len);
+                imap_cached = true;
+            }
+            imap = imap_cache;
+
+            if (errp) {
+                goto fail;
+            }
+        }
+
+        len /= sizeof(uint32_t);
+
+        i = 0;
+        assert(imap);
+        while (i < len) {
+            if (!use_parent) {
+                /* Only re-sync the interrupt-map when the device has it's
+                 * own map, to save time.
+                 */
+                imap = qemu_fdt_getprop(fdt, node_path, "interrupt-map", &len,
+                                          use_parent, &errp);
+
+                if (errp) {
+                    goto fail;
+                }
+
+                len /= sizeof(uint32_t);
+            }
+
+            bool match = true;
+            uint32_t new_intc_cells, new_cells[32];
+            i++; i++; /* FIXME: do address cells properly */
+            for (k = 0; k < intc_cells; ++k) {
+                uint32_t  map_val = be32_to_cpu(imap[i++]);
+                if ((cells[k] ^ map_val) & imap_mask[k]) {
+                    match = false;
+                }
+            }
+            /* when caching, we hackishly store the number of cells for
+             * the parent in the MSB. +1, so zero MSB means non cachd
+             * and the full lookup is needed.
+             */
+            intc_phandle = be32_to_cpu(imap[i++]);
+            if (intc_phandle & (0xffu << 24)) {
+                new_intc_cells = (intc_phandle >> 24) - 1;
+            } else {
+                if (qemu_fdt_get_node_by_phandle(fdt, intc_node_path,
+                                                 intc_phandle)) {
+                    goto fail;
+                }
+                new_intc_cells = qemu_fdt_getprop_cell(fdt, intc_node_path,
+                                                       "#interrupt-cells",
+                                                       NULL, 0, false, &errp);
+                imap[i - 1] = cpu_to_be32(intc_phandle |
+                                            (new_intc_cells + 1) << 24);
+                if (errp) {
+                    goto fail;
+                }
+            }
+            for (k = 0; k < new_intc_cells; ++k) {
+                new_cells[k] = be32_to_cpu(imap[i++]);
+            }
+            if (match) {
+                num_matches++;
+                ret = g_renew(qemu_irq, ret, num_matches + 1);
+                if (intc_phandle & (0xffu << 24)) {
+                    if (qemu_fdt_get_node_by_phandle(fdt, intc_node_path,
+                                                     intc_phandle &
+                                                     ((1 << 24) - 1))) {
+                        goto fail;
+                    }
+                }
+
+                DB_PRINT_NP(2, "Getting IRQ information: %s -> 0x%x (%s)\n",
+                            node_path, intc_phandle, intc_node_path);
+
+                memset(&ret[num_matches], 0, sizeof(*ret));
+                fdt_get_irq_info_from_intc(fdti, &ret[num_matches-1], intc_node_path,
+                                           new_cells, new_intc_cells, 1, &errp);
+                if (info) {
+                   sprintf(info, "%s", intc_node_path);
+                   info += strlen(info) + 1;
+                }
+                if (errp) {
+                    goto fail;
+                }
+            }
+        }
+        return ret;
+    }
+
+    DB_PRINT_NP(2, "Getting IRQ information: %s -> %s\n",
+                node_path, intc_node_path);
+
+    ret = g_new0(qemu_irq, fdt_generic_num_cpus + 2);
+    fdt_get_irq_info_from_intc(fdti, ret, intc_node_path, cells, intc_cells,
+                               fdt_generic_num_cpus, &errp);
+
+    if (errp) {
+        goto fail;
+    }
+
+    /* FIXME: Phase out this info bussiness */
     if (info) {
+        sprintf(info, "%s", intc_node_path);
+    }
+
+    return ret;
+
+fail:
+    if (errp) {
+        sprintf(info, "%s", error_get_pretty(errp));
+    } else {
         sprintf(info, "(none)");
     }
     return NULL;
 }
 
-qemu_irq fdt_get_irq(FDTMachineInfo *fdti, char *node_path, int irq_idx)
+qemu_irq *fdt_get_irq(FDTMachineInfo *fdti, char *node_path, int irq_idx,
+                      bool *map_mode)
 {
-    return fdt_get_irq_info(fdti, node_path, irq_idx, NULL, NULL);
+    return fdt_get_irq_info(fdti, node_path, irq_idx, NULL, map_mode);
 }
 
 /* FIXME: figure out a real solution to this */
@@ -293,23 +784,41 @@ static void substitute_char(char *s, char a, char b)
     }
 }
 
-static DeviceState *fdt_create_qdev_from_compat(char *compat, char **dev_type)
+static inline const char *trim_vendor(const char *s)
 {
-    DeviceState *ret = NULL;
+    /* FIXME: be more intelligent */
+    const char *ret = memchr(s, ',', strlen(s));
+    return ret ? ret + 1 : s;
+}
 
+static Object *fdt_create_from_compat(const char *compat, char **dev_type)
+{
+    Object *ret = NULL;
     char *c = g_strdup(compat);
-    ret = qdev_try_create(NULL, c);
+
+    /* Try to create the object */
+    ret = object_new(c);
+
     if (!ret) {
-        /* QEMU substitutes "."s for ","s in device names, so try with that
-         * substitutution
-         */
-        substitute_char(c, ',', '.');
-        ret = qdev_try_create(NULL, c);
-    }
-    if (!ret) {
-        /* try again with the version string trimmed */
+        /* Trim the version off the end and try again */
         trim_version(c);
-        ret = qdev_try_create(NULL, c);
+        ret = object_new(c);
+
+        if (!ret) {
+            /* Replace commas with full stops */
+            substitute_char(c, ',', '.');
+            ret = object_new(c);
+        }
+    }
+
+    if (!ret) {
+        /* Restart with the orginal string and now replace commas with full stops
+         * and try again. This means that versions are still included.
+         */
+        g_free(c);
+        c = g_strdup(compat);
+        substitute_char(c, ',', '.');
+        ret = object_new(c);
     }
 
     if (dev_type) {
@@ -317,14 +826,15 @@ static DeviceState *fdt_create_qdev_from_compat(char *compat, char **dev_type)
     } else {
         g_free(c);
     }
-    return ret;
-}
 
-static inline const char *trim_vendor(const char *s)
-{
-    /* FIXME: be more intelligent */
-    const char *ret = memchr(s, ',', strlen(s));
-    return ret ? ret + 1 : s;
+    if (!ret) {
+        const char *no_vendor = trim_vendor(compat);
+
+        if (no_vendor != compat) {
+            return fdt_create_from_compat(no_vendor, dev_type);
+        }
+    }
+    return ret;
 }
 
 /*FIXME: roll into device tree functionality */
@@ -366,38 +876,104 @@ hwaddr fdt_get_parent_base(const char *node_path,
     return base;
 }
 
+/* FIXME: use structs instead of parallel arrays */
+
+static const char *fdt_generic_reg_size_prop_names[] = {
+    "#address-cells",
+    "#size-cells",
+    "#bus-cells",
+    "#priority-cells",
+};
+
+static const int fdt_generic_reg_cells_defaults[] = {
+    1,
+    1,
+    0,
+    0,
+};
+
 static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
 {
-    int err;
-    qemu_irq irq;
-    hwaddr base;
+    Object *dev, *parent;
     int offset;
-    DeviceState *dev;
     char *dev_type = NULL;
     int is_intc;
-    int i;
+    Error *errp = NULL;
+    int i, j;
+    char parent_node_path[DT_PATH_LENGTH];
+    const FDTGenericGPIOSet *gpio_set = NULL;
+    FDTGenericGPIOClass *fggc = NULL;
 
-    dev = fdt_create_qdev_from_compat(compat, &dev_type);
-    if (!dev) {
-        DB_PRINT("no match found for %s\n", compat);
+    if (!compat) {
         return 1;
     }
-    /* FIXME: attach to the sysbus instead */
-    object_property_add_child(container_get(qdev_get_machine(), "/unattached"),
+    dev = fdt_create_from_compat(compat, &dev_type);
+    if (!dev) {
+        DB_PRINT_NP(1, "no match found for %s\n", compat);
+        return 1;
+    }
+    DB_PRINT_NP(1, "matched compat %s\n", compat);
+
+    /* Do this super early so fdt_generic_num_cpus is correct ASAP */
+    if (object_dynamic_cast(dev, TYPE_CPU)) {
+        fdt_generic_num_cpus++;
+        DB_PRINT_NP(0, "is a CPU - total so far %d\n", fdt_generic_num_cpus);
+    }
+
+    if (qemu_fdt_getparent(fdti->fdt, parent_node_path, node_path)) {
+        abort();
+    }
+    while (!fdt_init_has_opaque(fdti, parent_node_path)) {
+        fdt_init_yield(fdti);
+    }
+    parent = fdt_init_get_opaque(fdti, parent_node_path);
+    if (dev->parent) {
+        DB_PRINT_NP(0, "Node already parented - skipping node\n");
+    } else if (parent) {
+        DB_PRINT_NP(1, "parenting node\n");
+        object_property_add_child(OBJECT(parent),
                               qemu_fdt_get_node_name(fdti->fdt, node_path),
                               OBJECT(dev), NULL);
+        if (object_dynamic_cast(dev, TYPE_DEVICE)) {
+            Object *parent_bus = parent;
+            unsigned int depth = 0;
 
-    fdt_init_set_opaque(fdti, node_path, dev);
+            DB_PRINT_NP(1, "bus parenting node\n");
+            /* Look for an FDT ancestor that is a Bus.  */
+            while (parent_bus && !object_dynamic_cast(parent_bus, TYPE_BUS)) {
+                /*
+                 * Assert against insanely deep hierarchies which are an
+                 * indication of loops.
+                 */
+                assert(depth < 4096);
 
-    /* connect nic if appropriate */
-    static int nics;
-    if (object_property_find(OBJECT(dev), "mac", NULL)) {
-        qdev_set_nic_properties(dev, &nd_table[nics]);
-        if (nd_table[nics].instantiated) {
-            DB_PRINT("NIC instantiated: %s\n", dev_type);
-            nics++;
+                parent_bus = parent_bus->parent;
+                depth++;
+            }
+
+            if (!parent_bus
+                && object_dynamic_cast(OBJECT(dev), TYPE_SYS_BUS_DEVICE)) {
+                /*
+                 * Didn't find any bus. Use the default sysbus one.
+                 * This allows ad-hoc busses belonging to sysbus devices to be
+                 * visible to -device bus=x.
+                 */
+                parent_bus = OBJECT(sysbus_get_default());
+            }
+
+            if (parent_bus) {
+                qdev_set_parent_bus(DEVICE(dev), BUS(parent_bus));
+            }
         }
+    } else {
+        DB_PRINT_NP(1, "orphaning node\n");
+        /* FIXME: Make this go away (centrally) */
+        object_property_add_child(
+                              object_get_root(),
+                              qemu_fdt_get_node_name(fdti->fdt, node_path),
+                              OBJECT(dev), NULL);
     }
+    fdt_init_set_opaque(fdti, node_path, dev);
 
     offset = fdt_path_offset(fdti->fdt, node_path);
     for (offset = fdt_first_property_offset(fdti->fdt, offset);
@@ -411,7 +987,7 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
         propname = trim_vendor(propname);
         ObjectProperty *p = object_property_find(OBJECT(dev), propname, NULL);
         if (p) {
-            DB_PRINT("matched property: %s of type %s, len %d\n",
+            DB_PRINT_NP(1, "matched property: %s of type %s, len %d\n",
                                             propname, p->type, len);
         }
         if (!p) {
@@ -425,16 +1001,20 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
                               fdt_get_parent_base(node_path, fdti) : 0;
             object_property_set_int(OBJECT(dev), get_int_be(val, len) + offset,
                                     propname, &error_abort);
-            DB_PRINT("set property %s to %#llx\n", propname,
-                                            (long long unsigned int)get_int_be(val, len));
+            DB_PRINT_NP(0, "set property %s to %#llx\n", propname,
+                        (unsigned long long)get_int_be(val, len));
         } else if (!strcmp(p->type, "bool")) {
             object_property_set_bool(OBJECT(dev), !!get_int_be(val, len),
                         propname, &error_abort);
-            DB_PRINT("set property %s to %#llx\n", propname,
-                                            (long long unsigned int)get_int_be(val, len));
+            DB_PRINT_NP(0, "set property %s to %s\n", propname,
+                        get_int_be(val, len) ? "true" : "false");
         } else if (!strncmp(p->type, "link", 4)) {
             char target_node_path[DT_PATH_LENGTH];
-            DeviceState *linked_dev;
+            char propname_target[1024];
+            strcpy(propname_target, propname);
+            strcat(propname_target, "-target");
+
+            Object *linked_dev, *proxy;
 
             if (qemu_fdt_get_node_by_phandle(fdti->fdt, target_node_path,
                                                 get_int_be(val, len))) {
@@ -444,44 +1024,289 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
                 fdt_init_yield(fdti);
             }
             linked_dev = fdt_init_get_opaque(fdti, target_node_path);
-            object_property_set_link(OBJECT(dev), OBJECT(linked_dev), propname,
-                                        &error_abort);
-        } else if (!strcmp(p->type, "string")) {
-            object_property_set_str(OBJECT(dev), strndup(val, len), propname, &error_abort);
-	}
-    }
 
-    qdev_init_nofail(dev);
-    /* map slave attachment */
-    base = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", NULL, 0, false, &error_abort);
+            proxy = linked_dev ? object_property_get_link(linked_dev,
+                                                          propname_target,
+                                                          &errp) : NULL;
+            if (!errp && proxy) {
+                DB_PRINT_NP(0, "detected proxy object for %s connection\n",
+                            propname);
+                linked_dev = proxy;
+            }
+            errp = NULL;
+            if (linked_dev) {
+                object_property_set_link(OBJECT(dev), linked_dev, propname,
+                                         &errp);
+                if (errp) {
+                    /* Unable to set the property, maybe it is a memory
+                     * alias?
+                     */
+                    MemoryRegion *alias_mr;
+                    int offset = len / 2;
+                    alias_mr =
+                        sysbus_mmio_get_region(SYS_BUS_DEVICE(linked_dev),
+                                               get_int_be(val + offset,
+                                                          len - offset));
 
-    base += fdt_get_parent_base(node_path, fdti);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
+                    object_property_set_link(OBJECT(dev), OBJECT(alias_mr),
+                                             propname, &error_abort);
 
-    {
-        int len;
-        fdt_get_property(fdti->fdt, fdt_path_offset(fdti->fdt, node_path),
-                                "interrupt-controller", &len);
-        is_intc = len >= 0;
-        DB_PRINT("is interrupt controller: %c\n", is_intc ? 'y' : 'n');
-    }
-    /* connect irq */
-    for (i = 0; ; ++i) {
-        char irq_info[1024];
-        irq = fdt_get_irq_info(fdti, node_path, i, &err, irq_info);
-        /* INTCs inferr their top level, if no IRQ connection specified */
-        if (err && is_intc) {
-            irq = fdti->irq_base;
-            sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
-            fprintf(stderr, "FDT: (%s) connected top level irq %s\n", dev_type,
-                        irq_info);
-            break;
-        }
-        if (!err) {
-            sysbus_connect_irq(SYS_BUS_DEVICE(dev), i, irq);
-            fprintf(stderr, "FDT: (%s) connected irq %s\n", dev_type, irq_info);
+                    errp = NULL;
+                }
+                DB_PRINT_NP(0, "set link %s\n", propname);
+            }
         } else {
-            break;
+            DB_PRINT_NP(0, "WARNING: property is of unknown type\n");
+        }
+    }
+
+    if (object_dynamic_cast(dev, TYPE_DEVICE)) {
+        DeviceClass *dc = DEVICE_GET_CLASS(dev);
+        /* connect nic if appropriate */
+        static int nics;
+        const char *short_name = qemu_fdt_get_node_name(fdti->fdt, node_path);
+
+        if (object_property_find(OBJECT(dev), "mac", NULL) &&
+                    object_property_find(OBJECT(dev), "netdev", NULL)) {
+            qdev_set_nic_properties(DEVICE(dev), &nd_table[nics]);
+        }
+        if (nd_table[nics].instantiated) {
+            DB_PRINT_NP(0, "NIC instantiated: %s\n", dev_type);
+            nics++;
+        }
+
+        /* We also need to externally connect drives. Let's try to do that
+         * here. Don't use drive_get_next() as it always increments the
+         * next_block_unit variable.
+         */
+        object_property_find(OBJECT(dev), "drive", &errp);
+        if (errp == NULL) {
+            DriveInfo *dinfo = drive_get_next(IF_MTD);
+            if (dinfo) {
+                qdev_prop_set_drive(DEVICE(dev), "drive",
+                                    blk_by_legacy_dinfo(dinfo), &error_abort);
+            }
+        }
+        errp = NULL;
+
+        /* Regular TYPE_DEVICE houskeeping */
+        DB_PRINT_NP(0, "Short naming node: %s\n", short_name);
+        (DEVICE(dev))->id = g_strdup(short_name);
+        qdev_init_nofail(DEVICE(dev));
+        if (dc->reset) {
+            qemu_register_reset((void (*)(void *))dc->reset, dev);
+        }
+    }
+
+    if (object_dynamic_cast(dev, TYPE_SYS_BUS_DEVICE) || 
+        object_dynamic_cast(dev, TYPE_FDT_GENERIC_MMAP)) {
+        FDTGenericRegPropInfo reg = {0};
+        char parent_path[DT_PATH_LENGTH];
+        int cell_idx = 0;
+        bool extended = true;
+
+        qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg-extended", NULL,
+                              0, false, &errp);
+        if (errp) {
+            error_free(errp);
+            errp = NULL;
+            extended = false;
+            qemu_fdt_getparent(fdti->fdt, parent_path, node_path);
+        }
+
+        for (reg.n = 0;; reg.n++) {
+            char ph_parent[DT_PATH_LENGTH];
+            const char *pnp = parent_path;
+
+            reg.parents = g_renew(Object *, reg.parents, reg.n + 1);
+            reg.parents[reg.n] = parent;
+
+            if (extended) {
+                int p_ph = qemu_fdt_getprop_cell(fdti->fdt, node_path,
+                                                 "reg-extended", NULL,
+                                                 cell_idx++, false, &errp);
+                if (errp) {
+                    error_free(errp);
+                    errp = NULL;
+                    goto exit_reg_parse;
+                }
+                if (qemu_fdt_get_node_by_phandle(fdti->fdt, ph_parent,
+                                                     p_ph)) {
+                    goto exit_reg_parse;
+                }
+                while (!fdt_init_has_opaque(fdti, ph_parent)) {
+                    fdt_init_yield(fdti);
+                }
+                reg.parents[reg.n] = fdt_init_get_opaque(fdti, ph_parent);
+                pnp = ph_parent;
+            }
+
+            for (i = 0; i < FDT_GENERIC_REG_TUPLE_LENGTH; ++i) {
+                const char *size_prop_name = fdt_generic_reg_size_prop_names[i];
+                int nc = qemu_fdt_getprop_cell(fdti->fdt, pnp, size_prop_name,
+                                               NULL, 0, true, &errp);
+
+                if (errp) {
+                    int size_default = fdt_generic_reg_cells_defaults[i];
+
+                    DB_PRINT_NP(0, "WARNING: no %s for %s container, assuming "
+                                "default of %d\n", size_prop_name, pnp,
+                                size_default);
+                    nc = size_default;
+                    error_free(errp);
+                    errp = NULL;
+                }
+                
+                reg.x[i] = g_renew(uint64_t, reg.x[i], reg.n + 1);
+                reg.x[i][reg.n] = nc ?
+                    fdt_get_parent_base(node_path, fdti) +
+                    qemu_fdt_getprop_sized_cell(fdti->fdt, node_path,
+                                                extended ? "reg-extended"
+                                                         : "reg",
+                                                cell_idx, nc, &errp)
+                    : 0;
+                cell_idx += nc;
+                if (errp) {
+                    goto exit_reg_parse;
+                }
+            }
+        }
+exit_reg_parse:
+
+        if (object_dynamic_cast(dev, TYPE_FDT_GENERIC_MMAP)) {
+            FDTGenericMMapClass *fmc = FDT_GENERIC_MMAP_GET_CLASS(dev);
+            if (fmc->parse_reg) {
+                while (fmc->parse_reg(FDT_GENERIC_MMAP(dev), reg,
+                                      &error_abort)) {
+                    fdt_init_yield(fdti);
+                }
+            }
+        }
+    }
+    
+    if (object_dynamic_cast(dev, TYPE_SYS_BUS_DEVICE)) {
+        {
+            int len;
+            fdt_get_property(fdti->fdt, fdt_path_offset(fdti->fdt, node_path),
+                            "interrupt-controller", &len);
+            is_intc = len >= 0;
+            DB_PRINT_NP(is_intc ? 0 : 1, "is interrupt controller: %c\n",
+                        is_intc ? 'y' : 'n');
+        }
+        /* connect irq */
+        j = 0;
+        for (i = 0;; i++) {
+            char irq_info[1024];
+            char *irq_info_p = irq_info;
+            bool map_mode;
+            int len = -1;
+            qemu_irq *irqs = fdt_get_irq_info(fdti, node_path, i, irq_info,
+                                              &map_mode);
+            /* INTCs inferr their top level, if no IRQ connection specified */
+            fdt_get_property(fdti->fdt, fdt_path_offset(fdti->fdt, node_path),
+                             "interrupts-extended", &len);
+            if (!irqs && is_intc && i == 0 && len <= 0) {
+                FDTGenericIntc *id = (FDTGenericIntc *)object_dynamic_cast(
+                                        dev, TYPE_FDT_GENERIC_INTC);
+                FDTGenericIntcClass *idc = FDT_GENERIC_INTC_GET_CLASS(id);
+                if (id && idc->auto_parent) {
+                    Error *err = NULL;
+                    idc->auto_parent(id, &err);
+                } else {
+                    irqs = fdti->irq_base;
+                }
+            }
+            if (!irqs) {
+                break;
+            }
+            while (*irqs) {
+                FDTIRQConnection *irq = g_new0(FDTIRQConnection, 1);
+                *irq = (FDTIRQConnection) {
+                    .dev = DEVICE(dev),
+                    .name = SYSBUS_DEVICE_GPIO_IRQ,
+                    .merge_fn = qemu_irq_shared_or_handler,
+                    .i = j,
+                    .irq = *irqs,
+                    .sink_info = g_strdup(irq_info_p),
+                    .next = fdti->irqs
+                };
+                if (!map_mode) {
+                    j++;
+                } else {
+                    irq_info_p += strlen(irq_info_p) + 1;
+                }
+                fdti->irqs = irq;
+                irqs++;
+            }
+            if (map_mode) {
+                j++;
+            }
+        }
+    }
+
+    if (object_dynamic_cast(dev, TYPE_FDT_GENERIC_GPIO)) {
+        fggc = FDT_GENERIC_GPIO_GET_CLASS(dev);
+        gpio_set = fggc->client_gpios;
+    }
+
+    if (!gpio_set) {
+        gpio_set = default_gpio_sets;
+    }
+
+    for (; object_dynamic_cast(dev, TYPE_DEVICE) && gpio_set->names;
+           gpio_set++) {
+        bool end = false;
+        int cur_cell = 0;
+
+        for (i = 0; !end; i++) {
+            char *debug_success;
+            const FDTGenericGPIOConnection *c = gpio_set->gpios;
+            const char *gpio_name = NULL;
+            uint16_t named_idx = 0;
+            qemu_irq input, output;
+            memset(&input, 0, sizeof(input));
+
+            if (c) {
+                uint16_t range = c->range ? c->range : 1;
+                while ((c->fdt_index > i || c->fdt_index + range <= i)
+                       && c->name) {
+                    c++;
+                }
+                named_idx = i - c->fdt_index;
+                gpio_name = c->name;
+            }
+            if (!gpio_name) {
+                const char *names_propname = gpio_set->names->names_propname;
+                gpio_name = qemu_fdt_getprop_string(fdti->fdt, node_path,
+                                                    names_propname, i, false,
+                                                    NULL);
+            }
+            if (!gpio_name) {
+                input = qdev_get_gpio_in(DEVICE(dev), i);
+            } else {
+                input = qdev_get_gpio_in_named(DEVICE(dev), gpio_name,
+                                               named_idx);
+            }
+            debug_success = g_strdup_printf("Wiring GPIO input %s[%" PRId16 "] "
+                                            "to", gpio_name, named_idx);
+            output = fdt_get_gpio(fdti, node_path, &cur_cell, input, gpio_set,
+                                  debug_success, &end);
+            g_free(debug_success);
+            if (output) {
+                FDTIRQConnection *irq = g_new0(FDTIRQConnection, 1);
+                *irq = (FDTIRQConnection) {
+                    .dev = DEVICE(dev),
+                    .name = gpio_name,
+                    .merge_fn = qemu_irq_shared_or_handler,
+                    .i = named_idx,
+                    .irq = output,
+                    .sink_info = NULL, /*FIXME */
+                    .next = fdti->irqs
+                };
+                fdti->irqs = irq;
+                DB_PRINT_NP(1, "... GPIO output %s[%" PRId16 "]\n", gpio_name,
+                            named_idx);
+            }
         }
     }
 
@@ -491,5 +1316,32 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
 
     return 0;
 }
+
+static const TypeInfo fdt_generic_intc_info = {
+    .name          = TYPE_FDT_GENERIC_INTC,
+    .parent        = TYPE_INTERFACE,
+    .class_size = sizeof(FDTGenericIntcClass),
+};
+
+static const TypeInfo fdt_generic_mmap_info = {
+    .name          = TYPE_FDT_GENERIC_MMAP,
+    .parent        = TYPE_INTERFACE,
+    .class_size = sizeof(FDTGenericMMapClass),
+};
+
+static const TypeInfo fdt_generic_gpio_info = {
+    .name          = TYPE_FDT_GENERIC_GPIO,
+    .parent        = TYPE_INTERFACE,
+    .class_size = sizeof(FDTGenericGPIOClass),
+};
+
+static void fdt_generic_intc_register_types(void)
+{
+    type_register_static(&fdt_generic_intc_info);
+    type_register_static(&fdt_generic_mmap_info);
+    type_register_static(&fdt_generic_gpio_info);
+}
+
+type_init(fdt_generic_intc_register_types)
 
 fdt_register_compatibility(simple_bus_fdt_init, "simple-bus");

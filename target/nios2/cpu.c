@@ -66,6 +66,21 @@ static void nios2_cpu_reset(CPUState *cs)
 #endif
 }
 
+#ifndef CONFIG_USER_ONLY
+static void nios2_cpu_set_irq(void *opaque, int irq, int level)
+{
+    Nios2CPU *cpu = opaque;
+    CPUState *cs = CPU(cpu);
+    int type = irq ? CPU_INTERRUPT_NMI : CPU_INTERRUPT_HARD;
+
+    if (level) {
+        cpu_interrupt(cs, type);
+    } else {
+        cpu_reset_interrupt(cs, type);
+    }
+}
+#endif
+
 static void nios2_cpu_initfn(Object *obj)
 {
     CPUState *cs = CPU(obj);
@@ -83,6 +98,10 @@ static void nios2_cpu_initfn(Object *obj)
         tcg_initialized = true;
         nios2_tcg_init();
     }
+
+#ifndef CONFIG_USER_ONLY
+    qdev_init_gpio_in(DEVICE(cpu), nios2_cpu_set_irq, 2);
+#endif
 }
 
 Nios2CPU *cpu_nios2_init(const char *cpu_model)

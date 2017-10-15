@@ -59,6 +59,12 @@ int qemu_fdt_setprop_string(void *fdt, const char *node_path,
 int qemu_fdt_setprop_phandle(void *fdt, const char *node_path,
                              const char *property,
                              const char *target_node_path);
+uint64_t qemu_fdt_getprop_sized_cell(void *fdt, const char *node_path,
+                                     const char *property, int offset,
+                                     int size, Error **errp);
+char *qemu_fdt_getprop_string(void *fdt, const char*node_path,
+                              const char *property, int cell,
+                              bool inherit, Error **errp);
 /**
  * qemu_fdt_getprop: retrieve the value of a given property
  * @fdt: pointer to the device tree blob
@@ -87,6 +93,7 @@ uint32_t qemu_fdt_getprop_cell(void *fdt, const char *node_path,
                                const char *property, int *lenp,
                                int offset, bool inherit, Error **errp);
 uint32_t qemu_fdt_get_phandle(void *fdt, const char *path);
+uint32_t qemu_fdt_check_phandle(void *fdt, const char *path);
 uint32_t qemu_fdt_alloc_phandle(void *fdt);
 int qemu_fdt_nop_node(void *fdt, const char *node_path);
 int qemu_fdt_add_subnode(void *fdt, const char *name);
@@ -164,12 +171,20 @@ int qemu_fdt_setprop_sized_cells_from_array(void *fdt,
                                                 qdt_tmp);                 \
     })
 
+typedef struct QEMUDevtreeProp {
+    char *name;
+    int len;
+    void *value;
+} QEMUDevtreeProp;
+
 /* node queries */
 
 char *qemu_fdt_get_node_name(void *fdt, const char *node_path);
 int qemu_fdt_get_node_depth(void *fdt, const char *node_path);
 int qemu_fdt_get_num_children(void *fdt, const char *node_path, int depth);
 char **qemu_fdt_get_children(void *fdt, const char *node_path, int depth);
+int qemu_fdt_num_props(void *fdt, const char *node_path);
+QEMUDevtreeProp *qemu_fdt_get_props(void *fdt, const char *node_path);
 
 /* node getters */
 
@@ -182,6 +197,34 @@ int qemu_fdt_getparent(void *fdt, char *node_path,
                         const char *current);
 int qemu_fdt_get_root_node(void *fdt, char *node_path);
 
+/* qemu_fdt_get_child_by_name: Check for the matching node name under
+ * structural block of parent node and returns node path.
+ * args:
+ *     fdt: flatend device tree fp
+ *     parent_path : path of the parent, whose child to be searched
+ *     cmpname : node name of child
+ * return:
+ *     Node path of the child
+ * Note:
+ *     Returned string memory should be deallocated by g_free()
+ */
+char *qemu_fdt_get_child_by_name(void *fdt, char *parent_path,
+                                     const char *cmpname);
+
+/* qemu_fdt_get_n_nodes_by_name: Same as qemu_devtree_get_node_by_name but
+ * returns all the possible node paths matching the node name.
+ * args:
+ *     fdt: flatend device tree
+ *     array: pointer to hold array of strings
+ *     cmpname: node name to search for
+ * return:
+ *     Returns number of matching nodes found
+ * Note:
+ *     Array of strings should be released after usage. Each of the individual
+ *     strings in the array and the array itself should be released.
+ */
+int qemu_fdt_get_n_nodes_by_name(void *fdt, char ***array,
+                                     const char *cmpname);
 /* misc */
 
 int fdt_get_num_nodes(void *fdt);

@@ -12,16 +12,29 @@
 #include "sysemu/device_tree.h"
 #include "qemu/coroutine.h"
 
+/* This is the number of serial ports we have connected */
+extern int fdt_serial_ports;
+
 typedef struct FDTDevOpaque {
     char *node_path;
     void *opaque;
 } FDTDevOpaque;
 
+typedef struct FDTIRQConnection {
+    DeviceState *dev;
+    const char *name;
+    int i;
+    bool (*merge_fn)(bool *, int);
+    qemu_irq irq;
+    char *sink_info; /* Debug only */
+    void *next;
+} FDTIRQConnection;
+
 typedef struct FDTMachineInfo {
     /* the fdt blob */
     void *fdt;
     /* irq descriptors for top level int controller */
-    qemu_irq irq_base;
+    qemu_irq *irq_base;
     /* per-device specific opaques */
     FDTDevOpaque *dev_opaques;
 
@@ -31,6 +44,8 @@ typedef struct FDTMachineInfo {
     /* recheck coroutine queue */
     int      routinesPending;
     CoQueue *cq;
+    /* list of all IRQ connections */
+    FDTIRQConnection *irqs;
 } FDTMachineInfo;
 
 /* create a new FDTMachineInfo. The client is responsible for setting irq_base.
@@ -94,5 +109,17 @@ fdt_register_compatibility_opaque(function, compat, n, NULL)
 
 #define fdt_register_compatibility(function, compat) \
 fdt_register_compatibility_n(function, compat, 0)
+
+#define fdt_register_instance_opaque(function, inst, n, opaque) \
+static void __attribute__((constructor)) \
+function ## n ## _register_imp(void) { \
+    add_to_inst_bind_table(function, inst, opaque); \
+}
+
+#define fdt_register_instance_n(function, inst, n) \
+fdt_register_instance_opaque(function, inst, n, NULL)
+
+#define fdt_register_instance(function, inst) \
+fdt_register_instance_n(function, inst, 0)
 
 #endif /* FDT_GENERIC_H */

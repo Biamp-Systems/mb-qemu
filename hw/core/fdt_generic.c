@@ -24,18 +24,20 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/osdep.h"
 #include "hw/fdt_generic.h"
+#include "qemu/coroutine.h"
+#include "qemu/log.h"
 
-#define FDT_GENERIC_ERR_DEBUG
-
-#ifdef FDT_GENERIC_ERR_DEBUG
-#define DB_PRINT(...) do { \
-    fprintf(stderr,  ": %s: ", __func__); \
-    fprintf(stderr, ## __VA_ARGS__); \
-    } while (0);
-#else
-    #define DB_PRINT(...)
+#ifndef FDT_GENERIC_ERR_DEBUG
+#define FDT_GENERIC_ERR_DEBUG 0
 #endif
+#define DB_PRINT(lvl, ...) do { \
+    if (FDT_GENERIC_ERR_DEBUG > (lvl)) { \
+        qemu_log_mask(LOG_FDT, ": %s: ", __func__); \
+        qemu_log_mask(LOG_FDT, ## __VA_ARGS__); \
+    } \
+} while (0);
 
 #define FDT_GENERIC_MAX_PATTERN_LEN 1024
 
@@ -65,7 +67,7 @@ static void add_to_table(
 /* FIXME: add return codes that differentiate between not found and error */
 
 /* search a table for a key string and call the fdt init function if found.
- * Returns 0 if a match if found, 1 otherwise
+ * Returns 0 if a match is found, 1 otherwise
  */
 
 static int fdt_init_search_table(
@@ -78,7 +80,7 @@ static int fdt_init_search_table(
     if (c == NULL) {
         return 1;
     } else if (!strcmp(key, c->key)) {
-        return c->fdt_init(node_path, fdti, c->opaque);
+        return c->fdt_init ? c->fdt_init(node_path, fdti, c->opaque) : 0;
     }
     return fdt_init_search_table(node_path, fdti, key,
         (TableListNode **)(&(*head)->next));
@@ -154,9 +156,9 @@ void fdt_init_yield(FDTMachineInfo *fdti)
     static int yield_index;
     int this_yield = yield_index++;
 
-    DB_PRINT("yield #%d %p\n", this_yield, fdti->cq);
+    DB_PRINT(1, "Yield #%d\n", this_yield);
     qemu_co_queue_wait(fdti->cq);
-    DB_PRINT("unyield #%d\n", this_yield);
+    DB_PRINT(1, "Unyield #%d\n", this_yield);
 }
 
 void fdt_init_set_opaque(FDTMachineInfo *fdti, const char *node_path, void *opaque)

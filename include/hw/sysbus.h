@@ -21,6 +21,8 @@ typedef struct SysBusDevice SysBusDevice;
      OBJECT_CLASS_CHECK(SysBusDeviceClass, (klass), TYPE_SYS_BUS_DEVICE)
 #define SYS_BUS_DEVICE_GET_CLASS(obj) \
      OBJECT_GET_CLASS(SysBusDeviceClass, (obj), TYPE_SYS_BUS_DEVICE)
+#define SYS_BUS_DEVICE_PARENT_CLASS \
+     object_class_get_parent(object_class_by_name(TYPE_SYS_BUS_DEVICE))
 
 /**
  * SysBusDeviceClass:
@@ -78,6 +80,7 @@ struct SysBusDevice {
 typedef void FindSysbusDeviceFunc(SysBusDevice *sbdev, void *opaque);
 
 void sysbus_init_mmio(SysBusDevice *dev, MemoryRegion *memory);
+void sysbus_init_mmio_n(SysBusDevice *dev, MemoryRegion *memory, int n);
 MemoryRegion *sysbus_mmio_get_region(SysBusDevice *dev, int n);
 void sysbus_init_irq(SysBusDevice *dev, qemu_irq *p);
 void sysbus_pass_irq(SysBusDevice *dev, SysBusDevice *target);

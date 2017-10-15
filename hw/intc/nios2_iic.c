@@ -26,6 +26,7 @@
 #include "hw/sysbus.h"
 #include "cpu.h"
 #include "hw/nios2/nios2_iic.h"
+#include "hw/fdt_generic_util.h"
 
 #define TYPE_ALTERA_IIC "altera,iic"
 #define ALTERA_IIC(obj) \
@@ -101,41 +102,16 @@ void nios2_iic_update_cr_status(DeviceState *d)
     update_irq(s);
 }
 
-static void cpu_irq_handler(void *opaque, int irq, int level)
-{
-    Nios2CPU *cpu = opaque;
-    CPUState *cs = CPU(cpu);
-
-    int type = irq ? CPU_INTERRUPT_NMI : CPU_INTERRUPT_HARD;
-
-    if (level) {
-        cpu_interrupt(cs, type);
-    } else {
-        cpu_reset_interrupt(cs, type);
-    }
-}
-
-static inline DeviceState *altera_pic_init(Nios2CPU *cpu, qemu_irq cpu_irq)
+void nios2_iic_create(Nios2CPU *cpu)
 {
     DeviceState *dev;
-    SysBusDevice *d;
 
     dev = qdev_create(NULL, "altera,iic");
     qdev_prop_set_ptr(dev, "cpu", cpu);
     qdev_init_nofail(dev);
-    d = SYS_BUS_DEVICE(dev);
-    sysbus_connect_irq(d, 0, cpu_irq);
-
-    return dev;
-}
-
-void nios2_iic_create(Nios2CPU *cpu)
-{
-    qemu_irq *cpu_irq;
-
-    /* Create irq lines */
-    cpu_irq = qemu_allocate_irqs(cpu_irq_handler, cpu, 2);
-    cpu->env.pic_state = altera_pic_init(cpu, *cpu_irq);
+    cpu->env.pic_state = dev;
+    qdev_connect_gpio_out_named(dev, "irq", 0,
+                                qdev_get_gpio_in(DEVICE(first_cpu), 0));
 }
 
 static void altera_iic_init(Object *obj)
@@ -143,13 +119,42 @@ static void altera_iic_init(Object *obj)
     AlteraIIC *pv = ALTERA_IIC(obj);
 
     qdev_init_gpio_in(DEVICE(pv), irq_handler, 32);
-    sysbus_init_irq(SYS_BUS_DEVICE(obj), &pv->parent_irq);
+    qdev_init_gpio_out_named(DEVICE(obj), &pv->parent_irq, "irq", 1);
 }
+
+static int altera_iic_fdt_get_irq(FDTGenericIntc *obj, qemu_irq *irqs,
+                                  uint32_t *cells, int ncells, int max,
+                                  Error **errp)
+{
+    uint32_t idx;
+
+    if (ncells != 1) {
+        error_setg(errp, "IIC requires 1 interrupt cells: %d given",
+                   ncells);
+        return 0;
+    }
+    idx = cells[0];
+
+    if (idx >= 32) {
+        error_setg(errp, "IIC only supports 32 interrupts: index %"
+                   PRId32 " requested", idx);
+        return 0;
+    }
+
+    (*irqs) = qdev_get_gpio_in(DEVICE(obj), idx);
+    return 1;
+};
 
 static Property altera_iic_properties[] = {
     DEFINE_PROP_PTR("cpu", AlteraIIC, cpu),
     DEFINE_PROP_END_OF_LIST(),
 };
+
+static void altera_iic_fdt_auto_parent(FDTGenericIntc *obj, Error **errp)
+{
+    qdev_connect_gpio_out_named(DEVICE(obj), "irq", 0,
+                                qdev_get_gpio_in(DEVICE(first_cpu), 0));
+}
 
 static void altera_iic_realize(DeviceState *dev, Error **errp)
 {
@@ -164,11 +169,14 @@ static void altera_iic_realize(DeviceState *dev, Error **errp)
 static void altera_iic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    FDTGenericIntcClass *fgic = FDT_GENERIC_INTC_CLASS(klass);
 
     dc->props = altera_iic_properties;
     /* Reason: pointer property "cpu" */
     dc->cannot_instantiate_with_device_add_yet = true;
     dc->realize = altera_iic_realize;
+    fgic->get_irq = altera_iic_fdt_get_irq;
+    fgic->auto_parent = altera_iic_fdt_auto_parent;
 }
 
 static TypeInfo altera_iic_info = {
@@ -177,6 +185,10 @@ static TypeInfo altera_iic_info = {
     .instance_size = sizeof(AlteraIIC),
     .instance_init = altera_iic_init,
     .class_init    = altera_iic_class_init,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_FDT_GENERIC_INTC },
+        { }
+    },
 };
 
 static void altera_iic_register(void)

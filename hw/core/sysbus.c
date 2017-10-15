@@ -22,6 +22,8 @@
 #include "monitor/monitor.h"
 #include "exec/address-spaces.h"
 
+#include "hw/fdt_generic_util.h"
+
 static void sysbus_dev_print(Monitor *mon, DeviceState *dev, int indent);
 static char *sysbus_get_fw_dev_path(DeviceState *dev);
 
@@ -321,11 +323,32 @@ MemoryRegion *sysbus_address_space(SysBusDevice *dev)
     return get_system_memory();
 }
 
+static bool sysbus_parse_reg(FDTGenericMMap *obj, FDTGenericRegPropInfo reg,
+                             Error **errp) {
+    int i;
+
+    for (i = 0; i < reg.n; ++i) {
+        MemoryRegion *mr_parent = (MemoryRegion *)
+                object_dynamic_cast(reg.parents[i], TYPE_MEMORY_REGION);
+        if (!mr_parent) {
+            /* evil */
+            mr_parent = get_system_memory();
+        }
+        memory_region_add_subregion_overlap(mr_parent, reg.a[i],
+                    sysbus_mmio_get_region(SYS_BUS_DEVICE(obj), i),
+                    reg.p[i]);
+    }
+    return false;
+}
+
 static void sysbus_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
+    FDTGenericMMapClass *fmc = FDT_GENERIC_MMAP_CLASS(klass);
+
     k->init = sysbus_device_init;
     k->bus_type = TYPE_SYSTEM_BUS;
+    fmc->parse_reg = sysbus_parse_reg;
 }
 
 static const TypeInfo sysbus_device_type_info = {
@@ -335,6 +358,10 @@ static const TypeInfo sysbus_device_type_info = {
     .abstract = true,
     .class_size = sizeof(SysBusDeviceClass),
     .class_init = sysbus_device_class_init,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_FDT_GENERIC_MMAP },
+        { },
+    },
 };
 
 /* This is a nasty hack to allow passing a NULL bus to qdev_create.  */

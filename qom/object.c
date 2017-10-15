@@ -491,7 +491,7 @@ Object *object_new(const char *typename)
 {
     TypeImpl *ti = type_get_by_name(typename);
 
-    return object_new_with_type(ti);
+    return ti ? object_new_with_type(ti) : NULL;
 }
 
 
