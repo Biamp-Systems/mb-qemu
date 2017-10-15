@@ -22,13 +22,13 @@
 #include <string.h>
 #include <assert.h>
 
-#include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "qapi/error.h"
 #include "cpu.h"
+#include "qemu/osdep.h"
+#include "qemu/host-utils.h"
+#include "qapi/error.h"
 #include "exec/exec-all.h"
 #include "exec/log.h"
-#include "qemu/host-utils.h"
+#include "exec/helper-proto.h"
 
 #if defined(CONFIG_USER_ONLY)
 
@@ -65,13 +65,13 @@ void nios2_cpu_do_interrupt(CPUState *cs)
 
         env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
         env->regs[CR_STATUS] |= CR_STATUS_IH;
-        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
         env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
         env->regs[R_EA] = env->regs[R_PC] + 4;
-        env->regs[R_PC] = env->exception_addr;
+        env->regs[R_PC] = cpu->exception_addr;
         break;
 
     case EXCP_TLBD:
@@ -85,7 +85,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
              * be incorrect. */
             env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
             env->regs[CR_STATUS] |= CR_STATUS_EH;
-            env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+            env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
             env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
             env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
@@ -94,21 +94,21 @@ void nios2_cpu_do_interrupt(CPUState *cs)
             env->regs[CR_TLBMISC] |= CR_TLBMISC_WR;
 
             env->regs[R_EA] = env->regs[R_PC] + 4;
-            env->regs[R_PC] = env->fast_tlb_miss_addr;
+            env->regs[R_PC] = cpu->fast_tlb_miss_addr;
         } else {
             qemu_log_mask(CPU_LOG_INT, "TLB MISS (double) at pc=%x\n",
                           env->regs[R_PC]);
 
             /* Double TLB miss */
             env->regs[CR_STATUS] |= CR_STATUS_EH;
-            env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+            env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
             env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
             env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
             env->regs[CR_TLBMISC] |= CR_TLBMISC_DBL;
 
-            env->regs[R_PC] = env->exception_addr;
+            env->regs[R_PC] = cpu->exception_addr;
         }
         break;
 
@@ -119,7 +119,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
 
         env->regs[CR_ESTATUS] = env->regs[CR_STATUS];
         env->regs[CR_STATUS] |= CR_STATUS_EH;
-        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
         env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
@@ -129,7 +129,7 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         }
 
         env->regs[R_EA] = env->regs[R_PC] + 4;
-        env->regs[R_PC] = env->exception_addr;
+        env->regs[R_PC] = cpu->exception_addr;
         break;
 
     case EXCP_SUPERA:
@@ -144,12 +144,12 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         }
 
         env->regs[CR_STATUS] |= CR_STATUS_EH;
-        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
         env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
-        env->regs[R_PC] = env->exception_addr;
+        env->regs[R_PC] = cpu->exception_addr;
         break;
 
     case EXCP_ILLEGAL:
@@ -163,12 +163,12 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         }
 
         env->regs[CR_STATUS] |= CR_STATUS_EH;
-        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
         env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
-        env->regs[R_PC] = env->exception_addr;
+        env->regs[R_PC] = cpu->exception_addr;
         break;
 
     case EXCP_BREAK:
@@ -178,12 +178,12 @@ void nios2_cpu_do_interrupt(CPUState *cs)
         }
 
         env->regs[CR_STATUS] |= CR_STATUS_EH;
-        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE|CR_STATUS_U);
+        env->regs[CR_STATUS] &= ~(CR_STATUS_PIE | CR_STATUS_U);
 
         env->regs[CR_EXCEPTION] &= ~(0x1F << 2);
         env->regs[CR_EXCEPTION] |= (cs->exception_index & 0x1F) << 2;
 
-        env->regs[R_PC] = env->exception_addr;
+        env->regs[R_PC] = cpu->exception_addr;
         break;
 
     default:
@@ -290,7 +290,7 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
             paddr = lu.paddr + vaddr - lu.vaddr;
         } else {
             paddr = -1;
-            qemu_log("cpu_get_phys_page debug MISS: %08lX\n", addr);
+            qemu_log("cpu_get_phys_page debug MISS: %#" PRIx64 "\n", addr);
         }
     } else {
         paddr = addr & TARGET_PAGE_MASK;
@@ -299,4 +299,15 @@ hwaddr nios2_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     return paddr;
 }
 
+void nios2_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
+                                   MMUAccessType access_type,
+                                   int mmu_idx, uintptr_t retaddr)
+{
+    Nios2CPU *cpu = NIOS2_CPU(cs);
+    CPUNios2State *env = &cpu->env;
+
+    env->regs[CR_BADADDR] = addr;
+    env->regs[CR_EXCEPTION] = EXCP_UNALIGN << 2;
+    helper_raise_exception(env, EXCP_UNALIGN);
+}
 #endif /* !CONFIG_USER_ONLY */

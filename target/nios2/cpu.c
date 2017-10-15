@@ -56,11 +56,13 @@ static void nios2_cpu_reset(CPUState *cs)
     tlb_flush(cs);
 
     memset(env->regs, 0, sizeof(uint32_t) * NUM_CORE_REGS);
-    env->regs[R_PC] = env->reset_addr;
+    env->regs[R_PC] = cpu->reset_addr;
 
 #if defined(CONFIG_USER_ONLY)
     /* Start in user mode with interrupts enabled. */
     env->regs[CR_STATUS] = CR_STATUS_U | CR_STATUS_PIE;
+#else
+    env->regs[CR_STATUS] = 0;
 #endif
 }
 
@@ -71,11 +73,10 @@ static void nios2_cpu_initfn(Object *obj)
     CPUNios2State *env = &cpu->env;
     static bool tcg_initialized;
 
-    cpu->mmu_present = true;
     cs->env_ptr = env;
 
 #if !defined(CONFIG_USER_ONLY)
-    mmu_init(&env->mmu);
+    mmu_init(env);
 #endif
 
     if (tcg_enabled() && !tcg_initialized) {
@@ -90,10 +91,6 @@ Nios2CPU *cpu_nios2_init(const char *cpu_model)
 
     object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
 
-    cpu->env.reset_addr = RESET_ADDRESS;
-    cpu->env.exception_addr = EXCEPTION_ADDRESS;
-    cpu->env.fast_tlb_miss_addr = FAST_TLB_MISS_ADDRESS;
-
     return cpu;
 }
 
@@ -101,7 +98,6 @@ static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
     Nios2CPUClass *ncc = NIOS2_CPU_GET_CLASS(dev);
-
     Error *local_err = NULL;
 
     cpu_exec_realizefn(cs, &local_err);
@@ -148,15 +144,18 @@ static int nios2_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
     CPUClass *cc = CPU_GET_CLASS(cs);
     CPUNios2State *env = &cpu->env;
 
-    if (n > cc->gdb_num_core_regs)
+    if (n > cc->gdb_num_core_regs) {
         return 0;
+    }
 
-    if (n < 32)		/* GP regs */
+    if (n < 32) {          /* GP regs */
         return gdb_get_reg32(mem_buf, env->regs[n]);
-    else if (n == 32)	/* PC */
+    } else if (n == 32) {    /* PC */
         return gdb_get_reg32(mem_buf, env->regs[R_PC]);
-    else if (n < 49)	/* Status regs */
+    } else if (n < 49) {     /* Status regs */
         return gdb_get_reg32(mem_buf, env->regs[n - 1]);
+    }
+
     /* Invalid regs */
     return 0;
 }
@@ -167,23 +166,32 @@ static int nios2_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     CPUClass *cc = CPU_GET_CLASS(cs);
     CPUNios2State *env = &cpu->env;
 
-    if (n > cc->gdb_num_core_regs)
+    if (n > cc->gdb_num_core_regs) {
         return 0;
+    }
 
-    if (n < 32)		/* GP regs */
+    if (n < 32) {            /* GP regs */
         env->regs[n] = ldl_p(mem_buf);
-    else if (n == 32)	/* PC */
+    } else if (n == 32) {    /* PC */
         env->regs[R_PC] = ldl_p(mem_buf);
-    else if (n < 49)	/* Status regs */
+    } else if (n < 49) {     /* Status regs */
         env->regs[n - 1] = ldl_p(mem_buf);
+    }
 
     return 4;
 }
 
 static Property nios2_properties[] = {
     DEFINE_PROP_BOOL("mmu_present", Nios2CPU, mmu_present, true),
+    /* ALTR,pid-num-bits */
+    DEFINE_PROP_UINT32("mmu_pid_num_bits", Nios2CPU, pid_num_bits, 8),
+    /* ALTR,tlb-num-ways */
+    DEFINE_PROP_UINT32("mmu_tlb_num_ways", Nios2CPU, tlb_num_ways, 16),
+    /* ALTR,tlb-num-entries */
+    DEFINE_PROP_UINT32("mmu_pid_num_entries", Nios2CPU, tlb_num_entries, 256),
     DEFINE_PROP_END_OF_LIST(),
 };
+
 
 static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 {
@@ -197,7 +205,6 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
     ncc->parent_reset = cc->reset;
     cc->reset = nios2_cpu_reset;
 
-//FIXME    cc->class_by_name = nios2_cpu_class_by_name;
     cc->has_work = nios2_cpu_has_work;
     cc->do_interrupt = nios2_cpu_do_interrupt;
     cc->cpu_exec_interrupt = nios2_cpu_exec_interrupt;
@@ -207,8 +214,8 @@ static void nios2_cpu_class_init(ObjectClass *oc, void *data)
 #ifdef CONFIG_USER_ONLY
     cc->handle_mmu_fault = nios2_cpu_handle_mmu_fault;
 #else
+    cc->do_unaligned_access = nios2_cpu_do_unaligned_access;
     cc->get_phys_page_debug = nios2_cpu_get_phys_page_debug;
-/* FIXME *///    cc->do_unassigned_access = nios2_cpu_unassigned_access;
 #endif
     cc->gdb_read_register = nios2_cpu_gdb_read_register;
     cc->gdb_write_register = nios2_cpu_gdb_write_register;

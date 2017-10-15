@@ -97,12 +97,12 @@ static void altera_10m50_zephyr_init(MachineState *machine)
     vmstate_register_ram_global(ram);
     memory_region_add_subregion(sysmem, RAM_BASE, ram);
 
-    cpu->env.reset_addr = ALT_CPU_RESET_ADDR;
-    cpu->env.exception_addr = ALT_CPU_EXCEPTION_ADDR;
-    cpu->env.fast_tlb_miss_addr  = 0;
+    cpu->reset_addr = ALT_CPU_RESET_ADDR;
+    cpu->exception_addr = ALT_CPU_EXCEPTION_ADDR;
+    cpu->fast_tlb_miss_addr  = 0;
 
-    DPRINTF("\tcpu->env.reset_addr: \t\t%0x\n", cpu->env.reset_addr);
-    DPRINTF("\tcpu->env.exception_addr: \t%0x\n", cpu->env.exception_addr);
+    DPRINTF("\tcpu->reset_addr: \t\t%0x\n", cpu->reset_addr);
+    DPRINTF("\tcpu->exception_addr: \t%0x\n", cpu->exception_addr);
 
     nios2_iic_create(cpu);
 
@@ -114,9 +114,9 @@ static void altera_10m50_zephyr_init(MachineState *machine)
     altera_juart_create(0, JTAG_UART_0_BASE, irq[JTAG_UART_0_IRQ]);
     altera_timer_create(TIMER_0_BASE, irq[TIMER_0_IRQ], TIMER_0_FREQ);
 
-    cpu->env.reset_addr = ALT_CPU_RESET_ADDR;
-    cpu->env.exception_addr = ALT_CPU_EXCEPTION_ADDR;
-    cpu->env.fast_tlb_miss_addr = ALT_CPU_RESET_ADDR;
+    cpu->reset_addr = ALT_CPU_RESET_ADDR;
+    cpu->exception_addr = ALT_CPU_EXCEPTION_ADDR;
+    cpu->fast_tlb_miss_addr = ALT_CPU_RESET_ADDR;
 
     if (kernel_filename) {
         uint64_t entry;

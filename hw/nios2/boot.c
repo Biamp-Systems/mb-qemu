@@ -73,6 +73,11 @@ static void main_cpu_reset(void *opaque)
     }
 }
 
+static uint64_t translate_kernel_address(void *opaque, uint64_t addr)
+{
+    return addr - 0xc0000000LL;
+}
+
 static int nios2_load_dtb(struct nios2_boot_info bi, const uint32_t ramsize,
                           const char *kernel_cmdline, const char *dtb_filename)
 {
@@ -97,19 +102,14 @@ static int nios2_load_dtb(struct nios2_boot_info bi, const uint32_t ramsize,
 
     if (bi.initrd_start) {
         qemu_fdt_setprop_cell(fdt, "/chosen", "linux,initrd-start",
-                              bi.initrd_start);
+                              translate_kernel_address(NULL, bi.initrd_start));
 
         qemu_fdt_setprop_cell(fdt, "/chosen", "linux,initrd-end",
-                              bi.initrd_end);
+                              translate_kernel_address(NULL, bi.initrd_end));
     }
 
     cpu_physical_memory_write(bi.fdt, fdt, fdt_size);
     return fdt_size;
-}
-
-static uint64_t translate_kernel_address(void *opaque, uint64_t addr)
-{
-    return addr - 0xc0000000LL;
 }
 
 void nios2_load_kernel(Nios2CPU *cpu, hwaddr ddr_base,
@@ -203,7 +203,7 @@ void nios2_load_kernel(Nios2CPU *cpu, hwaddr ddr_base,
             }
             high += initrd_size;
         }
-	high = ROUND_UP(high, 4);
+        high = ROUND_UP(high, 4);
         boot_info.initrd_end = high;
 
         /* Device tree must be placed right after initrd (if available) */

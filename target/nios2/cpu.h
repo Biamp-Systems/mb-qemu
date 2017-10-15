@@ -68,6 +68,7 @@ typedef struct Nios2CPUClass {
 #define EXCEPTION_ADDRESS     0x00000004
 #define FAST_TLB_MISS_ADDRESS 0x00000008
 
+
 /* GP regs + CR regs + PC */
 #define NUM_CORE_REGS (32 + 32 + 1)
 
@@ -92,15 +93,15 @@ typedef struct Nios2CPUClass {
 /* Control register aliases */
 #define CR_BASE  32
 #define CR_STATUS    (CR_BASE + 0)
-#define   CR_STATUS_PIE  (1<<0)
-#define   CR_STATUS_U    (1<<1)
-#define   CR_STATUS_EH   (1<<2)
-#define   CR_STATUS_IH   (1<<3)
-#define   CR_STATUS_IL   (63<<4)
-#define   CR_STATUS_CRS  (63<<10)
-#define   CR_STATUS_PRS  (63<<16)
-#define   CR_STATUS_NMI  (1<<22)
-#define   CR_STATUS_RSIE (1<<23)
+#define   CR_STATUS_PIE  (1 << 0)
+#define   CR_STATUS_U    (1 << 1)
+#define   CR_STATUS_EH   (1 << 2)
+#define   CR_STATUS_IH   (1 << 3)
+#define   CR_STATUS_IL   (63 << 4)
+#define   CR_STATUS_CRS  (63 << 10)
+#define   CR_STATUS_PRS  (63 << 16)
+#define   CR_STATUS_NMI  (1 << 22)
+#define   CR_STATUS_RSIE (1 << 23)
 #define CR_ESTATUS   (CR_BASE + 1)
 #define CR_BSTATUS   (CR_BASE + 2)
 #define CR_IENABLE   (CR_BASE + 3)
@@ -116,23 +117,23 @@ typedef struct Nios2CPUClass {
 #define CR_TLBACC    (CR_BASE + 9)
 #define   CR_TLBACC_IGN_SHIFT 25
 #define   CR_TLBACC_IGN_MASK  (0x7F << CR_TLBACC_IGN_SHIFT)
-#define   CR_TLBACC_C         (1<<24)
-#define   CR_TLBACC_R         (1<<23)
-#define   CR_TLBACC_W         (1<<22)
-#define   CR_TLBACC_X         (1<<21)
-#define   CR_TLBACC_G         (1<<20)
+#define   CR_TLBACC_C         (1 << 24)
+#define   CR_TLBACC_R         (1 << 23)
+#define   CR_TLBACC_W         (1 << 22)
+#define   CR_TLBACC_X         (1 << 21)
+#define   CR_TLBACC_G         (1 << 20)
 #define   CR_TLBACC_PFN_MASK  0x000FFFFF
 #define CR_TLBMISC   (CR_BASE + 10)
 #define   CR_TLBMISC_WAY_SHIFT 20
 #define   CR_TLBMISC_WAY_MASK  (0xF << CR_TLBMISC_WAY_SHIFT)
-#define   CR_TLBMISC_RD        (1<<19)
-#define   CR_TLBMISC_WR        (1<<18)
+#define   CR_TLBMISC_RD        (1 << 19)
+#define   CR_TLBMISC_WR        (1 << 18)
 #define   CR_TLBMISC_PID_SHIFT 4
 #define   CR_TLBMISC_PID_MASK  (0x3FFF << CR_TLBMISC_PID_SHIFT)
-#define   CR_TLBMISC_DBL       (1<<3)
-#define   CR_TLBMISC_BAD       (1<<2)
-#define   CR_TLBMISC_PERM      (1<<1)
-#define   CR_TLBMISC_D         (1<<0)
+#define   CR_TLBMISC_DBL       (1 << 3)
+#define   CR_TLBMISC_BAD       (1 << 2)
+#define   CR_TLBMISC_PERM      (1 << 1)
+#define   CR_TLBMISC_D         (1 << 0)
 #define CR_ENCINJ    (CR_BASE + 11)
 #define CR_BADADDR   (CR_BASE + 12)
 #define CR_CONFIG    (CR_BASE + 13)
@@ -170,13 +171,11 @@ typedef struct Nios2CPUClass {
 struct CPUNios2State {
     uint32_t regs[NUM_CORE_REGS];
 
-    /* Addresses that are hard-coded in the FPGA build settings */
-    uint32_t reset_addr;
-    uint32_t exception_addr;
-    uint32_t fast_tlb_miss_addr;
-
 #if !defined(CONFIG_USER_ONLY)
     Nios2MMU mmu;
+
+    uint32_t irq_pending;
+
     /* interrupt controller handle for callbacks */
     DeviceState *pic_state;
 #endif
@@ -197,6 +196,14 @@ typedef struct Nios2CPU {
 
     CPUNios2State env;
     bool mmu_present;
+    uint32_t pid_num_bits;
+    uint32_t tlb_num_ways;
+    uint32_t tlb_num_entries;
+
+    /* Addresses that are hard-coded in the FPGA build settings */
+    uint32_t reset_addr;
+    uint32_t exception_addr;
+    uint32_t fast_tlb_miss_addr;
 } Nios2CPU;
 
 static inline Nios2CPU *nios2_env_get_cpu(CPUNios2State *env)
@@ -216,6 +223,9 @@ void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUNios2State *env);
 void nios2_cpu_dump_state(CPUState *cpu, FILE *f, fprintf_function cpu_fprintf,
                           int flags);
 hwaddr nios2_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+void nios2_cpu_do_unaligned_access(CPUState *cpu, vaddr addr,
+                                   MMUAccessType access_type,
+                                   int mmu_idx, uintptr_t retaddr);
 
 #define TARGET_PHYS_ADDR_SPACE_BITS 32
 #define TARGET_VIRT_ADDR_SPACE_BITS 32
@@ -261,4 +271,3 @@ static inline void cpu_get_tb_cpu_state(CPUNios2State *env, target_ulong *pc,
 }
 
 #endif /* CPU_NIOS2_H */
-

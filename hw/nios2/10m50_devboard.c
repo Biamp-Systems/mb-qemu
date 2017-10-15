@@ -24,6 +24,8 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu-common.h"
+#include "cpu.h"
 
 #include "hw/sysbus.h"
 #include "hw/hw.h"
@@ -38,7 +40,7 @@
 
 #include "boot.h"
 
-#define BINARY_DEVICE_TREE_FILE		"10m50-devboard.dtb"
+#define BINARY_DEVICE_TREE_FILE    "10m50-devboard.dtb"
 
 static void nios2_10m50_ghrd_init(MachineState *machine)
 {
@@ -93,9 +95,9 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
     altera_timer_create(0xe0000880, irq[5], 75 * 1000000);
 
     /* Configure new exception vectors and reset CPU for it to take effect. */
-    cpu->env.reset_addr = 0xd4000000;
-    cpu->env.exception_addr = 0xc8000120;
-    cpu->env.fast_tlb_miss_addr = 0xc0000100;
+    cpu->reset_addr = 0xd4000000;
+    cpu->exception_addr = 0xc8000120;
+    cpu->fast_tlb_miss_addr = 0xc0000100;
 
     nios2_load_kernel(cpu, ram_base, ram_size, machine->initrd_filename,
                       BINARY_DEVICE_TREE_FILE, NULL);

@@ -20,16 +20,12 @@
 #ifndef MMU_NIOS2_H
 #define MMU_NIOS2_H
 
-
 typedef struct Nios2TLBEntry {
     target_ulong tag;
     target_ulong data;
 } Nios2TLBEntry;
 
 typedef struct Nios2MMU {
-    int pid_bits;
-    int tlb_num_ways;
-    int tlb_num_entries;
     int tlb_entry_mask;
     uint32_t pteaddr_wr;
     uint32_t tlbacc_wr;
@@ -47,8 +43,8 @@ void mmu_flip_um(CPUNios2State *env, unsigned int um);
 unsigned int mmu_translate(CPUNios2State *env,
                            Nios2MMULookup *lu,
                            target_ulong vaddr, int rw, int mmu_idx);
-uint32_t mmu_read(CPUNios2State *env, uint32_t rn);
+void mmu_read_debug(CPUNios2State *env, uint32_t rn);
 void mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v);
-void mmu_init(Nios2MMU *mmu);
+void mmu_init(CPUNios2State *env);
 
 #endif /* MMU_NIOS2_H */

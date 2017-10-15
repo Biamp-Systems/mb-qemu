@@ -27,10 +27,6 @@
 
 #include "boot.h"
 
-#define BINARY_DEVICE_TREE_FILE		"10m50-devboard.dtb"
-
-uint32_t irq_pending;
-
 static void nios2_pic_cpu_handler(void *opaque, int irq, int level)
 {
     Nios2CPU *cpu = opaque;
@@ -39,13 +35,13 @@ static void nios2_pic_cpu_handler(void *opaque, int irq, int level)
     int type = irq ? CPU_INTERRUPT_NMI : CPU_INTERRUPT_HARD;
 
     if (type == CPU_INTERRUPT_HARD) {
-        irq_pending = level;
+        env->irq_pending = level;
 
         if (level && (env->regs[CR_STATUS] & CR_STATUS_PIE)) {
-            irq_pending = 0;
+            env->irq_pending = 0;
             cpu_interrupt(cs, type);
         } else if (!level) {
-            irq_pending = 0;
+            env->irq_pending = 0;
             cpu_reset_interrupt(cs, type);
         }
     } else {
@@ -62,8 +58,8 @@ void nios2_check_interrupts(CPUNios2State *env)
     Nios2CPU *cpu = nios2_env_get_cpu(env);
     CPUState *cs = CPU(cpu);
 
-    if (irq_pending) {
-        irq_pending = 0;
+    if (env->irq_pending) {
+        env->irq_pending = 0;
         cpu_interrupt(cs, CPU_INTERRUPT_HARD);
     }
 }

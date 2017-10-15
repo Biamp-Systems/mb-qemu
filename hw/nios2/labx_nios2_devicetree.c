@@ -169,15 +169,15 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
     /* TODO: use the entrypoint of the passed in elf file or
        the device-tree one */
 #if 0
-    cpu->env.reset_addr =
+    cpu->reset_addr =
         qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,reset-addr", NULL, 0, 0, &errp);
 #else
-    cpu->env.reset_addr = 0xc0000000;
+    cpu->reset_addr = 0xc0000000;
 #endif
 
-    cpu->env.exception_addr =
+    cpu->exception_addr =
         qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,exception-addr", NULL, 0, 0, &errp);
-    cpu->env.fast_tlb_miss_addr =
+    cpu->fast_tlb_miss_addr =
         qemu_fdt_getprop_cell(fdti->fdt, node_path, "ALTR,fast-tlb-miss-addr", NULL, 0, 0, &errp);
 
     /* reset again to use the new reset vector */

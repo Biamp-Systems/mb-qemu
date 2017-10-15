@@ -215,6 +215,15 @@ void altera_timer_create(const hwaddr addr, qemu_irq irq, uint32_t frequency)
     sysbus_connect_irq(bus, 0, irq);
 }
 
+static void altera_timer_reset(DeviceState *dev)
+{
+    AlteraTimer *t = ALTERA_TIMER(dev);
+
+    ptimer_stop(t->ptimer);
+    ptimer_set_limit(t->ptimer, 0xffffffff, 1);
+    memset(t->regs, 0, ARRAY_SIZE(t->regs));
+}
+
 static Property altera_timer_properties[] = {
     DEFINE_PROP_UINT32("clock-frequency", AlteraTimer, freq_hz, 0),
     DEFINE_PROP_END_OF_LIST(),
@@ -226,6 +235,7 @@ static void altera_timer_class_init(ObjectClass *klass, void *data)
 
     dc->realize = altera_timer_realize;
     dc->props = altera_timer_properties;
+    dc->reset = altera_timer_reset;
 }
 
 static const TypeInfo altera_timer_info = {

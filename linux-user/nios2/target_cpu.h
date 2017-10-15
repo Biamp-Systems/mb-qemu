@@ -30,7 +30,8 @@ static inline void cpu_clone_regs(CPUNios2State *env, target_ulong newsp)
 
 static inline void cpu_set_tls(CPUNios2State *env, target_ulong newtls)
 {
-    /* Linux kernel 3.10 does not pay any attention to CLONE_SETTLS
+    /*
+     * Linux kernel 3.10 does not pay any attention to CLONE_SETTLS
      * in copy_thread(), so QEMU need not do so either.
      */
 }

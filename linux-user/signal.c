@@ -3944,15 +3944,15 @@ struct target_rt_sigframe {
     struct target_ucontext uc;
 };
 
-static inline unsigned long sigsp(unsigned long sp, struct target_sigaction *ka)
+static unsigned long sigsp(unsigned long sp, struct target_sigaction *ka)
 {
-    if (unlikely((ka->sa_flags & SA_ONSTACK)) && ! sas_ss_flags(sp))
+    if (unlikely((ka->sa_flags & SA_ONSTACK)) && !sas_ss_flags(sp)) {
 #ifdef CONFIG_STACK_GROWSUP
         return target_sigaltstack_used.ss_sp;
-
 #else
         return target_sigaltstack_used.ss_sp + target_sigaltstack_used.ss_size;
 #endif
+    }
     return sp;
 }
 
@@ -3997,16 +3997,17 @@ static int rt_restore_ucontext(CPUNios2State *env, struct target_ucontext *uc,
                                int *pr2)
 {
     int temp;
-    abi_ulong frame_addr = env->regs[R_SP];
+    abi_ulong off, frame_addr = env->regs[R_SP];
     unsigned long *gregs = uc->tuc_mcontext.gregs;
     int err;
 
     /* Always make any pending restarted system calls return -EINTR */
-    //current->restart_block.fn = do_no_restart_syscall;
+    /* current->restart_block.fn = do_no_restart_syscall; */
 
     __get_user(temp, &uc->tuc_mcontext.version);
-    if (temp != MCONTEXT_VERSION)
-        goto badframe;
+    if (temp != MCONTEXT_VERSION) {
+        return 1;
+    }
 
     /* restore passed registers */
     __get_user(env->regs[1], &gregs[0]);
@@ -4033,32 +4034,29 @@ static int rt_restore_ucontext(CPUNios2State *env, struct target_ucontext *uc,
     __get_user(env->regs[22], &gregs[21]);
     __get_user(env->regs[23], &gregs[22]);
     /* gregs[23] is handled below */
-    __get_user(env->regs[R_FP], &gregs[24]);  /* Verify, should this be
-                            settable */
-    __get_user(env->regs[R_GP], &gregs[25]);  /* Verify, should this be
-                            settable */
-
-    __get_user(temp, &gregs[26]);  /* Not really necessary no user
-                            settable bits */
+    /* Verify, should this be settable */
+    __get_user(env->regs[R_FP], &gregs[24]);
+    /* Verify, should this be settable */
+    __get_user(env->regs[R_GP], &gregs[25]);
+    /* Not really necessary no user settable bits */
+    __get_user(temp, &gregs[26]);
     __get_user(env->regs[R_EA], &gregs[27]);
 
     __get_user(env->regs[R_RA], &gregs[23]);
     __get_user(env->regs[R_SP], &gregs[28]);
 
-    if (do_sigaltstack(frame_addr + offsetof(struct target_rt_sigframe, uc.tuc_stack), 0,
-                       get_sp_from_cpustate(env)) == -EFAULT) {
-        goto badframe;
+    off = offsetof(struct target_rt_sigframe, uc.tuc_stack);
+    err = do_sigaltstack(frame_addr + off, 0, get_sp_from_cpustate(env));
+    if (err == -EFAULT) {
+        return 1;
     }
 
     *pr2 = env->regs[2];
-    return err;
-
-badframe:
-    return 1;
+    return 0;
 }
 
 static void *get_sigframe(struct target_sigaction *ka, CPUNios2State *env,
-			  size_t frame_size)
+                          size_t frame_size)
 {
     unsigned long usp;
 
@@ -4075,15 +4073,16 @@ static void *get_sigframe(struct target_sigaction *ka, CPUNios2State *env,
 static void setup_rt_frame(int sig, struct target_sigaction *ka,
                            target_siginfo_t *info,
                            target_sigset_t *set,
-			   CPUNios2State *env)
+                           CPUNios2State *env)
 {
     struct target_rt_sigframe *frame;
     int i, err = 0;
 
     frame = get_sigframe(ka, env, sizeof(*frame));
 
-    if (ka->sa_flags & SA_SIGINFO)
-            tswap_siginfo(&frame->info, info);
+    if (ka->sa_flags & SA_SIGINFO) {
+        tswap_siginfo(&frame->info, info);
+    }
 
     /* Create the ucontext.  */
     __put_user(0, &frame->uc.tuc_flags);
@@ -4097,8 +4096,9 @@ static void setup_rt_frame(int sig, struct target_sigaction *ka,
             (abi_ulong *)&frame->uc.tuc_sigmask.sig[i]);
     }
 
-    if (err)
+    if (err) {
         goto give_sigsegv;
+    }
 
     /* Set up to return from userspace; jump to fixed address sigreturn
        trampoline on kuser page.  */
@@ -4116,8 +4116,7 @@ give_sigsegv:
     if (sig == TARGET_SIGSEGV) {
         ka->_sa_handler = TARGET_SIG_DFL;
     }
-    force_sig(TARGET_SIGSEGV);
-    return;
+    force_sigsegv(sig);
 }
 
 long do_sigreturn(CPUNios2State *env)
@@ -4142,8 +4141,9 @@ long do_rt_sigreturn(CPUNios2State *env)
     target_to_host_sigset(&set, &frame->uc.tuc_sigmask);
     do_sigprocmask(SIG_SETMASK, &set, NULL);
 
-    if (rt_restore_ucontext(env, &frame->uc, &rval))
+    if (rt_restore_ucontext(env, &frame->uc, &rval)) {
         goto badframe;
+    }
 
     unlock_user_struct(frame, frame_addr, 0);
     return rval;

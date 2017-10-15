@@ -25,9 +25,9 @@
 #include "hw/nios2/nios2_iic.h"
 
 #if !defined(CONFIG_USER_ONLY)
-uint32_t helper_mmu_read(CPUNios2State *env, uint32_t rn)
+void helper_mmu_read_debug(CPUNios2State *env, uint32_t rn)
 {
-    return mmu_read(env, rn);
+    mmu_read_debug(env, rn);
 }
 
 void helper_mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
@@ -54,42 +54,3 @@ void helper_raise_exception(CPUNios2State *env, uint32_t index)
     cs->exception_index = index;
     cpu_loop_exit(cs);
 }
-
-void helper_memalign(CPUNios2State *env, uint32_t addr, uint32_t dr, uint32_t wr, uint32_t mask)
-{
-    if (addr & mask) {
-        qemu_log("unaligned access addr=%x mask=%x, wr=%d dr=r%d\n",
-                 addr, mask, wr, dr);
-        env->regs[CR_BADADDR] = addr;
-        env->regs[CR_EXCEPTION] = EXCP_UNALIGN << 2;
-        helper_raise_exception(env, EXCP_UNALIGN);
-    }
-}
-
-uint32_t helper_divs(uint32_t a, uint32_t b)
-{
-    return (int32_t)a / (int32_t)b;
-}
-
-uint32_t helper_divu(uint32_t a, uint32_t b)
-{
-    return a / b;
-}
-
-#ifdef CALL_TRACING
-void helper_call_status(uint32_t pc, uint32_t target)
-{
-    qemu_log("%08X: CALL %08X %s\n", pc, target, lookup_symbol(target));
-}
-
-void helper_eret_status(uint32_t pc)
-{
-    qemu_log("%08X: ERET STATUS %08X, ESTATUS %08X, EA %08X\n",
-             pc, env->regs[CR_STATUS], env->regs[CR_ESTATUS], env->regs[R_EA]);
-}
-
-void helper_ret_status(uint32_t pc)
-{
-    qemu_log("%08X: RET RA %08X\n", pc, env->regs[R_RA]);
-}
-#endif
