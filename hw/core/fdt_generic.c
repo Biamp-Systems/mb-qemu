@@ -24,7 +24,7 @@
  * THE SOFTWARE.
  */
 
-#include "fdt_generic.h"
+#include "hw/fdt_generic.h"
 
 #define FDT_GENERIC_ERR_DEBUG
 

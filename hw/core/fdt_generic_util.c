@@ -36,7 +36,7 @@
     #define DB_PRINT(...)
 #endif
 
-#include "fdt_generic_util.h"
+#include "hw/fdt_generic_util.h"
 #include "net/net.h"
 #include "block/block.h"
 #include "qapi/error.h"

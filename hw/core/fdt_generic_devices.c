@@ -10,8 +10,8 @@
 #include "hw/char/serial.h"
 #include "qapi/error.h"
 
-#include "fdt_generic_util.h"
-#include "fdt_generic_devices.h"
+#include "hw/fdt_generic_util.h"
+#include "hw/fdt_generic_devices.h"
 
 #define FLASH_SECTOR_SIZE (64 * 1024)
 

@@ -38,8 +38,8 @@
 #include "qemu/config-file.h"
 #include "qapi/error.h"
 
-#include "hw/fdt/fdt_generic_util.h"
-#include "hw/fdt/fdt_generic_devices.h"
+#include "hw/fdt_generic_util.h"
+#include "hw/fdt_generic_devices.h"
 
 #include "boot.h"
 

@@ -39,9 +39,9 @@
 #include "qapi/error.h"
 #include "hw/nios2/nios2_iic.h"
 
-#include "hw/fdt/fdt_generic.h"
-#include "hw/fdt/fdt_generic_devices.h"
-#include "hw/fdt/fdt_generic_util.h"
+#include "hw/fdt_generic.h"
+#include "hw/fdt_generic_devices.h"
+#include "hw/fdt_generic_util.h"
 
 #include "boot.h"
 
