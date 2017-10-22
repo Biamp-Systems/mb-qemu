@@ -88,7 +88,7 @@ static void zynq7000_usb_nuke_phy(void *fdt)
 {
     char usb_node_path[DT_PATH_LENGTH];
 
-    int ret = qemu_devtree_node_by_compatible(fdt, usb_node_path,
+    int ret = qemu_fdt_node_by_compatible(fdt, usb_node_path,
                                               "xlnx,ps7-usb-1.00.a");
     if (!ret) {
         qemu_fdt_setprop_string(fdt, usb_node_path, "dr_mode", "host");
@@ -103,7 +103,7 @@ static int zynq7000_mdio_phy_connect(char *node_path, FDTMachineInfo *fdti,
 
     /* Register MDIO obj instance to fdti, useful during child registration */
     fdt_init_set_opaque(fdti, node_path, Opaque);
-    if (qemu_devtree_getparent(fdti->fdt, parent_node_path, node_path)) {
+    if (qemu_fdt_getparent(fdti->fdt, parent_node_path, node_path)) {
         abort();
     }
 
@@ -132,11 +132,11 @@ static int zynq7000_mdio_phy_create(char *node_path, FDTMachineInfo *fdti,
     DeviceState *dev;
     uint32_t reg;
 
-    if (qemu_devtree_getparent(fdti->fdt, parent_node_path, node_path)) {
+    if (qemu_fdt_getparent(fdti->fdt, parent_node_path, node_path)) {
         abort();
     }
 
-    if (!strcmp(qemu_devtree_get_node_name(fdti->fdt, parent_node_path),
+    if (!strcmp(qemu_fdt_get_node_name(fdti->fdt, parent_node_path),
                 "mdio")) {
         /* To not break the backward compatiblity lets also consider mdio node
          * dts can as be as below, with mdio node, when which we do not connect
@@ -163,7 +163,7 @@ static int zynq7000_mdio_phy_create(char *node_path, FDTMachineInfo *fdti,
 
     dev = DEVICE(object_new("88e1116r"));
     qdev_set_parent_bus(dev, qdev_get_child_bus(Opaque, "mdio-bus"));
-    reg = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", 0, false,
+    reg = qemu_fdt_getprop_cell(fdti->fdt, node_path, "reg", NULL, 0, false,
                                 NULL);
     object_property_set_int(OBJECT(dev), reg, "reg", NULL);
     return 0;
@@ -181,11 +181,12 @@ static char *zynq7000_qspi_flash_node_clone(void *fdt)
     memset(qspi_new_node_path, 0, sizeof(qspi_new_node_path));
 
     /* search for ps7 qspi node */
-    int ret = qemu_devtree_node_by_compatible(fdt, qspi_node_path,
+    int ret = qemu_fdt_node_by_compatible(fdt, qspi_node_path,
                                               "xlnx,zynq-qspi-1.0");
     if (ret == 0) {
         int qspi_is_dual = qemu_fdt_getprop_cell(fdt, qspi_node_path,
-                                                 "is-dual", 0, false, NULL);
+                                                 "is-dual", 0, NULL,
+						 false, NULL);
         /* Set bus-cells property to 1 */
         val[0] = cpu_to_be32(1);
         val[1] = 0;
@@ -197,8 +198,8 @@ static char *zynq7000_qspi_flash_node_clone(void *fdt)
                  qspi_node_path);
 
         /* get the spi flash node to clone from (assume first child node) */
-        int child_num = qemu_devtree_get_num_children(fdt, qspi_node_path, 1);
-        char **child_flash = qemu_devtree_get_children(fdt, qspi_node_path, 1);
+        int child_num = qemu_fdt_get_num_children(fdt, qspi_node_path, 1);
+        char **child_flash = qemu_fdt_get_children(fdt, qspi_node_path, 1);
         if (child_num > 0) {
             char *compat_str = NULL;
             compat_str = qemu_fdt_getprop(fdt, child_flash[0],
@@ -243,7 +244,7 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
     int mem_offset = 0;
 
     /* Find a memory node or add new one if needed */
-    while (qemu_devtree_get_node_by_name(fdt, node_path, "memory")) {
+    while (qemu_fdt_get_node_by_name(fdt, node_path, "memory")) {
         qemu_fdt_add_subnode(fdt, "/memory@0");
         qemu_fdt_setprop_cells(fdt, "/memory@0", "reg", 0, ram_size);
     }
@@ -300,7 +301,7 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
 
                 mem_container = qemu_fdt_getprop_cell(fdt, mem_node_path,
                                                       "container",
-                                                      0, 0, NULL);
+                                                      NULL, 0, 0, NULL);
 
                 /* We only want RAM, so we filter to make sure the container of
                  * what we are looking at is the same as the main memory@0 node
@@ -314,15 +315,15 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
                          mem_node_path);
 
                 reg_value = qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                  "reg", 0, 0, NULL);
+                                                  "reg", NULL, 0, 0, NULL);
                 reg_value = reg_value << 32;
                 reg_value += qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                   "reg", 1, 0, NULL);
+                                                   "reg", NULL, 1, 0, NULL);
 
                 DB_PRINT(1, "    Address: 0x%" PRIx64 " ", reg_value);
 
                 reg_value += qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                   "reg", 2, 0, NULL);
+                                                   "reg", NULL, 2, 0, NULL);
 
                 DB_PRINT_RAW(1, "Size: 0x%" PRIx64 "\n", reg_value);
 
@@ -366,18 +367,18 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
 
                     /* This assumes two address cells and two size cells */
                     region_start = qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                       "reg", 0, 0, NULL);
+                                                       "reg", NULL, 0, 0, NULL);
                     region_start = region_start << 32;
                     region_start += qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                       "reg", 1, 0, NULL);
+                                                       "reg", NULL, 1, 0, NULL);
 
                     DB_PRINT(1, "    Address: 0x%" PRIx64 " ", region_start);
 
                     region_size = qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                         "reg", 2, 0, NULL);
+                                                         "reg", NULL, 2, 0, NULL);
                     region_size = region_size << 32;
                     region_size += qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                         "reg", 3, 0, NULL);
+                                                         "reg", NULL, 3, 0, NULL);
 
                     region_size = MIN(region_size, ram_size - mem_created);
                     ram_size -= region_size;
@@ -386,7 +387,8 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
 
                     container_phandle = qemu_fdt_getprop_cell(fdt,
                                                               mem_node_path,
-                                                              "container", 0,
+                                                              "container",
+							      NULL,  0,
                                                               0, NULL);
                     container_offset =
                             fdt_node_offset_by_phandle(fdt, container_phandle);
@@ -396,7 +398,7 @@ static memory_info init_memory(void *fdt, ram_addr_t ram_size, bool zynq_7000)
                                         object_resolve_path(node_path, NULL));
 
                     ram_prop = qemu_fdt_getprop_cell(fdt, mem_node_path,
-                                                     "qemu,ram", 0,
+                                                     "qemu,ram", NULL, 0,
                                                      0, NULL);
 
                     memory_region_init_ram(ram_region, NULL, region_name,
@@ -490,7 +492,7 @@ static void arm_generic_fdt_init(MachineState *machine)
         qspi_clone_spi_flash_node_name = zynq7000_qspi_flash_node_clone(fdt);
 
         /* Ensure that an interrupt controller exists before disabling it */
-        if (!qemu_devtree_get_node_by_name(fdt, node_path,
+        if (!qemu_fdt_get_node_by_name(fdt, node_path,
                                            "interrupt-controller")) {
             qemu_fdt_setprop_cells(fdt, node_path,
                                    "disable-linux-gic-init", true);

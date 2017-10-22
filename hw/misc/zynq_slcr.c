@@ -212,7 +212,7 @@ static void zynq_slcr_set_qspi(ZynqSLCRState *s, void *fdt)
     memset(node_path, 0, sizeof(node_path));
     /* find the Zynq QSPI node path with compatible string, return if node
      * not found */
-    if (qemu_devtree_node_by_compatible(fdt, node_path,
+    if (qemu_fdt_node_by_compatible(fdt, node_path,
                                         "xlnx,zynq-qspi-1.0")) {
         DB_PRINT("DT, PS7 QSPI node not found\n");
         return ;
@@ -222,7 +222,7 @@ static void zynq_slcr_set_qspi(ZynqSLCRState *s, void *fdt)
      * flash node. Then set up the MIO registers for the first QSPI flash.
      * Use the is-dual property to determine whether MIO registers
      * configuration is required to setup for the second QSPI flash*/
-    if (qemu_devtree_get_num_children(fdt, node_path, 1)) {
+    if (qemu_fdt_get_num_children(fdt, node_path, 1)) {
         DB_PRINT("DT, PS7 QSPI: child node found\n");
         /* Set MIO 1 - 6 (qspi0)  with QSPI + LVCOMS18 (0x202) */
         for (i = 1; i <= 6; i++) {
@@ -230,7 +230,7 @@ static void zynq_slcr_set_qspi(ZynqSLCRState *s, void *fdt)
         }
 
         /* Check for dual mode */
-        if (qemu_fdt_getprop_cell(fdt, node_path, "is-dual", 0,
+        if (qemu_fdt_getprop_cell(fdt, node_path, "is-dual", NULL, 0,
                                   false, &errp) ==  1) {
             DB_PRINT("DT, PS QSPI is in dual\n");
             /* Set MIO 0 (qspi1_cs) with QSPI + LVCOMS18 (0x202) */

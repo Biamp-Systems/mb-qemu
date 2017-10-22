@@ -211,7 +211,7 @@ int qemu_fdt_get_root_node(void *fdt, char *node_path);
 char *qemu_fdt_get_child_by_name(void *fdt, char *parent_path,
                                      const char *cmpname);
 
-/* qemu_fdt_get_n_nodes_by_name: Same as qemu_devtree_get_node_by_name but
+/* qemu_fdt_get_n_nodes_by_name: Same as qemu_fdt_get_node_by_name but
  * returns all the possible node paths matching the node name.
  * args:
  *     fdt: flatend device tree
