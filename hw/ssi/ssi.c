@@ -89,7 +89,9 @@ static bool ssi_slave_parse_reg(FDTGenericMMap *obj, FDTGenericRegPropInfo reg,
         snprintf(bus_name, 16, "spi");
         parent_bus = qdev_get_child_bus(parent, bus_name);
     }
-    qdev_set_parent_bus(DEVICE(s), parent_bus);
+    if (parent_bus) {
+        qdev_set_parent_bus(DEVICE(s), parent_bus);
+    }
     return false;
 }
 
