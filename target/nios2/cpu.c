@@ -26,6 +26,10 @@
 #include "exec/gdbstub.h"
 #include "hw/qdev-properties.h"
 
+#ifndef CONFIG_USER_ONLY
+#include "hw/fdt_generic_util.h"
+#endif
+
 static void nios2_cpu_set_pc(CPUState *cs, vaddr value)
 {
     Nios2CPU *cpu = NIOS2_CPU(cs);
@@ -126,7 +130,6 @@ static void nios2_cpu_realizefn(DeviceState *dev, Error **errp)
     }
 
     qemu_init_vcpu(cs);
-    cpu_reset(cs);
 
     ncc->parent_realize(dev, errp);
 }
@@ -248,6 +251,12 @@ static const TypeInfo nios2_cpu_type_info = {
     .instance_init = nios2_cpu_initfn,
     .class_size = sizeof(Nios2CPUClass),
     .class_init = nios2_cpu_class_init,
+#ifndef CONFIG_USER_ONLY
+    .interfaces    = (InterfaceInfo[]) {
+        { TYPE_FDT_GENERIC_GPIO },
+        { }
+    },
+#endif
 };
 
 static void nios2_cpu_register_types(void)

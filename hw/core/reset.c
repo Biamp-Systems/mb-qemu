@@ -66,7 +66,9 @@ void qemu_devices_reset(void)
 
     /* reset all devices */
     QTAILQ_FOREACH_SAFE(re, &reset_handlers, entry, nre) {
-        re->func(re->opaque);
+        if (re->func) {
+            re->func(re->opaque);
+        }
     }
 }
 

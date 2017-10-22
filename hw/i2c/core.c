@@ -9,6 +9,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
+#include "hw/fdt_generic_util.h"
 
 typedef struct I2CNode I2CNode;
 
@@ -19,16 +20,9 @@ struct I2CNode {
 
 #define I2C_BROADCAST 0x00
 
-struct I2CBus
-{
-    BusState qbus;
-    QLIST_HEAD(, I2CNode) current_devs;
-    uint8_t saved_address;
-    bool broadcast;
-};
-
 static Property i2c_props[] = {
     DEFINE_PROP_UINT8("address", struct I2CSlave, address, 0),
+    DEFINE_PROP_UINT8("address-range", struct I2CSlave, address_range, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -129,7 +123,9 @@ int i2c_start_transfer(I2CBus *bus, uint8_t address, int recv)
         QTAILQ_FOREACH(kid, &bus->qbus.children, sibling) {
             DeviceState *qdev = kid->child;
             I2CSlave *candidate = I2C_SLAVE(qdev);
-            if ((candidate->address == address) || (bus->broadcast)) {
+            if ((candidate->address <= address &&
+                 address < candidate->address + candidate->address_range) ||
+                (bus->broadcast)) {
                 node = g_malloc(sizeof(struct I2CNode));
                 node->elt = candidate;
                 QLIST_INSERT_HEAD(&bus->current_devs, node, next);
@@ -162,6 +158,11 @@ int i2c_start_transfer(I2CBus *bus, uint8_t address, int recv)
                 return rv;
             }
         }
+        if (sc->decode_address) {
+            if (sc->decode_address(node->elt, address)) {
+                return 1;
+            }
+        }
     }
     return 0;
 }
@@ -170,6 +171,10 @@ void i2c_end_transfer(I2CBus *bus)
 {
     I2CSlaveClass *sc;
     I2CNode *node, *next;
+
+    if (QLIST_EMPTY(&bus->current_devs)) {
+        return;
+    }
 
     QLIST_FOREACH_SAFE(node, &bus->current_devs, next, next) {
         sc = I2C_SLAVE_GET_CLASS(node->elt);
@@ -270,6 +275,8 @@ const VMStateDescription vmstate_i2c_slave = {
     .post_load = i2c_slave_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_UINT8(address, I2CSlave),
+        VMSTATE_UINT8(address_range, I2CSlave),
+        VMSTATE_BOOL(broadcast, I2CBus),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -296,13 +303,39 @@ DeviceState *i2c_create_slave(I2CBus *bus, const char *name, uint8_t addr)
     return dev;
 }
 
+static bool i2c_slave_parse_reg(FDTGenericMMap *obj, FDTGenericRegPropInfo reg,
+                                Error **errp)
+{
+    DeviceState *parent;
+    I2CSlave *slave;
+
+    slave = I2C_SLAVE(obj);
+
+    slave->address = reg.a[0];
+    parent = (DeviceState *)object_dynamic_cast(reg.parents[0], TYPE_DEVICE);
+
+    if (!parent) {
+            return false;
+    }
+
+    if (!parent->realized) {
+        return true;
+    }
+
+    qdev_set_parent_bus(DEVICE(obj), qdev_get_child_bus(parent, "i2c"));
+
+    return false;
+}
+
 static void i2c_slave_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
+    FDTGenericMMapClass *fmc = FDT_GENERIC_MMAP_CLASS(klass);
     k->init = i2c_slave_qdev_init;
     set_bit(DEVICE_CATEGORY_MISC, k->categories);
     k->bus_type = TYPE_I2C_BUS;
     k->props = i2c_props;
+    fmc->parse_reg = i2c_slave_parse_reg;
 }
 
 static const TypeInfo i2c_slave_type_info = {
@@ -312,6 +345,9 @@ static const TypeInfo i2c_slave_type_info = {
     .abstract = true,
     .class_size = sizeof(I2CSlaveClass),
     .class_init = i2c_slave_class_init,
+    .interfaces = (InterfaceInfo []) {
+        { TYPE_FDT_GENERIC_MMAP },
+    },
 };
 
 static void i2c_slave_register_types(void)

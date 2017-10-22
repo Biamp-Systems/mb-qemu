@@ -27,7 +27,7 @@
 #include "hw/qdev-core.h"
 #include "qemu/timer.h"
 #include "qmp-commands.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
 #include "trace.h"
 #include "exec/memory.h"
 
@@ -1410,6 +1410,8 @@ void register_displaychangelistener(DisplayChangeListener *dcl)
     static DisplaySurface *dummy;
     QemuConsole *con;
 
+    assert(!dcl->ds);
+
     if (dcl->ops->dpy_gl_ctx_create) {
         /* display has opengl support */
         assert(dcl->con);
@@ -1538,6 +1540,8 @@ void dpy_gfx_replace_surface(QemuConsole *con,
     DisplaySurface *old_surface = con->surface;
     DisplayChangeListener *dcl;
 
+    assert(old_surface != surface);
+
     con->surface = surface;
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != (dcl->con ? dcl->con : active_console)) {
@@ -1582,27 +1586,6 @@ static void dpy_refresh(DisplayState *s)
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (dcl->ops->dpy_refresh) {
             dcl->ops->dpy_refresh(dcl);
-        }
-    }
-}
-
-void dpy_gfx_copy(QemuConsole *con, int src_x, int src_y,
-                  int dst_x, int dst_y, int w, int h)
-{
-    DisplayState *s = con->ds;
-    DisplayChangeListener *dcl;
-
-    if (!qemu_console_is_visible(con)) {
-        return;
-    }
-    QLIST_FOREACH(dcl, &s->listeners, next) {
-        if (con != (dcl->con ? dcl->con : active_console)) {
-            continue;
-        }
-        if (dcl->ops->dpy_gfx_copy) {
-            dcl->ops->dpy_gfx_copy(dcl, src_x, src_y, dst_x, dst_y, w, h);
-        } else { /* TODO */
-            dcl->ops->dpy_gfx_update(dcl, dst_x, dst_y, w, h);
         }
     }
 }
@@ -1735,16 +1718,30 @@ QEMUGLContext dpy_gl_ctx_get_current(QemuConsole *con)
     return con->gl->ops->dpy_gl_ctx_get_current(con->gl);
 }
 
-void dpy_gl_scanout(QemuConsole *con,
-                    uint32_t backing_id, bool backing_y_0_top,
-                    uint32_t backing_width, uint32_t backing_height,
-                    uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+void dpy_gl_scanout_disable(QemuConsole *con)
 {
     assert(con->gl);
-    con->gl->ops->dpy_gl_scanout(con->gl, backing_id,
-                                 backing_y_0_top,
-                                 backing_width, backing_height,
-                                 x, y, width, height);
+    if (con->gl->ops->dpy_gl_scanout_disable) {
+        con->gl->ops->dpy_gl_scanout_disable(con->gl);
+    } else {
+        con->gl->ops->dpy_gl_scanout_texture(con->gl, 0, false, 0, 0,
+                                             0, 0, 0, 0);
+    }
+}
+
+void dpy_gl_scanout_texture(QemuConsole *con,
+                            uint32_t backing_id,
+                            bool backing_y_0_top,
+                            uint32_t backing_width,
+                            uint32_t backing_height,
+                            uint32_t x, uint32_t y,
+                            uint32_t width, uint32_t height)
+{
+    assert(con->gl);
+    con->gl->ops->dpy_gl_scanout_texture(con->gl, backing_id,
+                                         backing_y_0_top,
+                                         backing_width, backing_height,
+                                         x, y, width, height);
 }
 
 void dpy_gl_update(QemuConsole *con,
@@ -1852,8 +1849,8 @@ QemuConsole *qemu_console_lookup_by_device(DeviceState *dev, uint32_t head)
         if (DEVICE(obj) != dev) {
             continue;
         }
-        h = object_property_get_int(OBJECT(consoles[i]),
-                                    "head", &error_abort);
+        h = object_property_get_uint(OBJECT(consoles[i]),
+                                     "head", &error_abort);
         if (h != head) {
             continue;
         }
@@ -2056,7 +2053,7 @@ static void text_console_do_init(Chardev *chr, DisplayState *ds)
         s->t_attrib = s->t_attrib_default;
     }
 
-    qemu_chr_be_generic_open(chr);
+    qemu_chr_be_event(chr, CHR_EVENT_OPENED);
 }
 
 static void vc_chr_open(Chardev *chr,
@@ -2122,13 +2119,6 @@ void qemu_console_resize(QemuConsole *s, int width, int height)
 
     surface = qemu_create_displaysurface(width, height);
     dpy_gfx_replace_surface(s, surface);
-}
-
-void qemu_console_copy(QemuConsole *con, int src_x, int src_y,
-                       int dst_x, int dst_y, int w, int h)
-{
-    assert(con->console_type == GRAPHIC_CONSOLE);
-    dpy_gfx_copy(con, src_x, src_y, dst_x, dst_y, w, h);
 }
 
 DisplaySurface *qemu_console_surface(QemuConsole *console)

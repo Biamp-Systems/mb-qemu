@@ -1,5 +1,6 @@
 common-obj-$(CONFIG_ARM_TIMER) += arm_timer.o
 common-obj-$(CONFIG_ARM_MPTIMER) += arm_mptimer.o
+common-obj-$(CONFIG_ARM_V7M) += armv7m_systick.o
 common-obj-$(CONFIG_A9_GTIMER) += a9gtimer.o
 common-obj-$(CONFIG_CADENCE) += cadence_ttc.o
 common-obj-$(CONFIG_DS1338) += ds1338.o
@@ -20,6 +21,8 @@ common-obj-$(CONFIG_IMX) += imx_epit.o
 common-obj-$(CONFIG_IMX) += imx_gpt.o
 common-obj-$(CONFIG_LM32) += lm32_timer.o
 common-obj-$(CONFIG_MILKYMIST) += milkymist-sysctl.o
+common-obj-$(CONFIG_XILINX_IOMODULE_PIT) += xilinx_iomod_pit.o
+common-obj-$(CONFIG_XLNX_ZYNQMP) += arm_generic_timer.o
 
 obj-$(CONFIG_ALTERA_TIMER) += altera_timer.o
 obj-$(CONFIG_EXYNOS4) += exynos4210_mct.o
@@ -40,3 +43,4 @@ common-obj-$(CONFIG_STM32F2XX_TIMER) += stm32f2xx_timer.o
 common-obj-$(CONFIG_ASPEED_SOC) += aspeed_timer.o
 
 common-obj-$(CONFIG_SUN4V_RTC) += sun4v-rtc.o
+common-obj-$(CONFIG_CMSDK_APB_TIMER) += cmsdk-apb-timer.o

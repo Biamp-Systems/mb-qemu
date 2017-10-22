@@ -454,7 +454,7 @@ static void spapr_vio_busdev_realize(DeviceState *qdev, Error **errp)
         dev->qdev.id = id;
     }
 
-    dev->irq = xics_spapr_alloc(spapr->xics, dev->irq, false, &local_err);
+    dev->irq = spapr_ics_alloc(spapr->ics, dev->irq, false, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         return;
@@ -557,8 +557,8 @@ const VMStateDescription vmstate_spapr_vio = {
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
         /* Sanity check */
-        VMSTATE_UINT32_EQUAL(reg, VIOsPAPRDevice),
-        VMSTATE_UINT32_EQUAL(irq, VIOsPAPRDevice),
+        VMSTATE_UINT32_EQUAL(reg, VIOsPAPRDevice, NULL),
+        VMSTATE_UINT32_EQUAL(irq, VIOsPAPRDevice, NULL),
 
         /* General VIO device state */
         VMSTATE_UINT64(signal_state, VIOsPAPRDevice),

@@ -51,27 +51,6 @@ static inline bool excp_is_internal(int excp)
         || excp == EXCP_SEMIHOST;
 }
 
-/* Exception names for debug logging; note that not all of these
- * precisely correspond to architectural exceptions.
- */
-static const char * const excnames[] = {
-    [EXCP_UDEF] = "Undefined Instruction",
-    [EXCP_SWI] = "SVC",
-    [EXCP_PREFETCH_ABORT] = "Prefetch Abort",
-    [EXCP_DATA_ABORT] = "Data Abort",
-    [EXCP_IRQ] = "IRQ",
-    [EXCP_FIQ] = "FIQ",
-    [EXCP_BKPT] = "Breakpoint",
-    [EXCP_EXCEPTION_EXIT] = "QEMU v7M exception exit",
-    [EXCP_KERNEL_TRAP] = "QEMU intercept of kernel commpage",
-    [EXCP_HVC] = "Hypervisor Call",
-    [EXCP_HYP_TRAP] = "Hypervisor Trap",
-    [EXCP_SMC] = "Secure Monitor Call",
-    [EXCP_VIRQ] = "Virtual IRQ",
-    [EXCP_VFIQ] = "Virtual FIQ",
-    [EXCP_SEMIHOST] = "Semihosting call",
-};
-
 /* Scale factor for generic timers, ie number of ns per tick.
  * This gives a 62.5MHz timer.
  */
@@ -205,11 +184,26 @@ static inline unsigned int arm_pamax(ARMCPU *cpu)
  * This is always the case if our translation regime is 64 bit,
  * but depends on TTBCR.EAE for 32 bit.
  */
+static inline bool extended_addresses_enabled_el(CPUARMState *env,
+                                                 unsigned int el,
+                                                 TCR *tcr)
+{
+    return arm_el_is_aa64(env, el) ||
+           (arm_feature(env, ARM_FEATURE_LPAE) && (tcr->raw_tcr & TTBCR_EAE));
+}
+
 static inline bool extended_addresses_enabled(CPUARMState *env)
 {
-    TCR *tcr = &env->cp15.tcr_el[arm_is_secure(env) ? 3 : 1];
-    return arm_el_is_aa64(env, 1) ||
-           (arm_feature(env, ARM_FEATURE_LPAE) && (tcr->raw_tcr & TTBCR_EAE));
+    unsigned int cur_el = arm_current_el(env);
+    TCR *tcr;
+
+    if (cur_el == 0) {
+        /* EL0 is under EL1's TCR control.  */
+        cur_el = 1;
+    }
+
+    tcr = &env->cp15.tcr_el[cur_el];
+    return extended_addresses_enabled_el(env, cur_el, tcr);
 }
 
 /* Valid Syndrome Register EC field values */
@@ -418,7 +412,7 @@ static inline uint32_t syn_breakpoint(int same_el)
 
 static inline uint32_t syn_wfx(int cv, int cond, int ti)
 {
-    return (EC_WFX_TRAP << ARM_EL_EC_SHIFT) |
+    return (EC_WFX_TRAP << ARM_EL_EC_SHIFT) | ARM_EL_IL |
            (cv << 24) | (cond << 20) | ti;
 }
 

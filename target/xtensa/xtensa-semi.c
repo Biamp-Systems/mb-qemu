@@ -27,8 +27,14 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "chardev/char-fe.h"
 #include "exec/helper-proto.h"
+#include "exec/semihost.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
+#include "sysemu/sysemu.h"
+
+static CharBackend *xtensa_sim_console;
 
 enum {
     TARGET_SYS_exit = 1,
@@ -147,6 +153,15 @@ static uint32_t errno_h2g(int host_errno)
     }
 }
 
+void xtensa_sim_open_console(Chardev *chr)
+{
+    static CharBackend console;
+
+    qemu_chr_fe_init(&console, chr, &error_abort);
+    qemu_chr_fe_set_handlers(&console, NULL, NULL, NULL, NULL, NULL, NULL, true);
+    xtensa_sim_console = &console;
+}
+
 void HELPER(simcall)(CPUXtensaState *env)
 {
     CPUState *cs = CPU(xtensa_env_get_cpu(env));
@@ -165,6 +180,7 @@ void HELPER(simcall)(CPUXtensaState *env)
             uint32_t fd = regs[3];
             uint32_t vaddr = regs[4];
             uint32_t len = regs[5];
+            uint32_t len_done = 0;
 
             while (len > 0) {
                 hwaddr paddr = cpu_get_phys_page_debug(cs, vaddr);
@@ -172,25 +188,54 @@ void HELPER(simcall)(CPUXtensaState *env)
                     TARGET_PAGE_SIZE - (vaddr & (TARGET_PAGE_SIZE - 1));
                 uint32_t io_sz = page_left < len ? page_left : len;
                 hwaddr sz = io_sz;
-                void *buf = cpu_physical_memory_map(paddr, &sz, is_write);
+                void *buf = cpu_physical_memory_map(paddr, &sz, !is_write);
+                uint32_t io_done;
+                bool error = false;
 
                 if (buf) {
                     vaddr += io_sz;
                     len -= io_sz;
-                    regs[2] = is_write ?
-                        write(fd, buf, io_sz) :
-                        read(fd, buf, io_sz);
-                    regs[3] = errno_h2g(errno);
-                    cpu_physical_memory_unmap(buf, sz, is_write, sz);
-                    if (regs[2] == -1) {
-                        break;
+                    if (fd < 3 && xtensa_sim_console) {
+                        if (is_write && (fd == 1 || fd == 2)) {
+                            io_done = qemu_chr_fe_write_all(xtensa_sim_console,
+                                                            buf, io_sz);
+                            regs[3] = errno_h2g(errno);
+                        } else {
+                            qemu_log_mask(LOG_GUEST_ERROR,
+                                          "%s fd %d is not supported with chardev console\n",
+                                          is_write ?
+                                          "writing to" : "reading from", fd);
+                            io_done = -1;
+                            regs[3] = TARGET_EBADF;
+                        }
+                    } else {
+                        io_done = is_write ?
+                            write(fd, buf, io_sz) :
+                            read(fd, buf, io_sz);
+                        regs[3] = errno_h2g(errno);
                     }
+                    if (io_done == -1) {
+                        error = true;
+                        io_done = 0;
+                    }
+                    cpu_physical_memory_unmap(buf, sz, !is_write, io_done);
                 } else {
-                    regs[2] = -1;
+                    error = true;
                     regs[3] = TARGET_EINVAL;
                     break;
                 }
+                if (error) {
+                    if (!len_done) {
+                        len_done = -1;
+                    }
+                    break;
+                }
+                len_done += io_done;
+                if (io_done < io_sz) {
+                    break;
+                }
             }
+            regs[2] = len_done;
         }
         break;
 
@@ -240,10 +285,6 @@ void HELPER(simcall)(CPUXtensaState *env)
             uint32_t target_tvv[2];
 
             struct timeval tv = {0};
-            fd_set fdset;
-
-            FD_ZERO(&fdset);
-            FD_SET(fd, &fdset);
 
             if (target_tv) {
                 cpu_memory_rw_debug(cs, target_tv,
@@ -251,38 +292,73 @@ void HELPER(simcall)(CPUXtensaState *env)
                 tv.tv_sec = (int32_t)tswap32(target_tvv[0]);
                 tv.tv_usec = (int32_t)tswap32(target_tvv[1]);
             }
-            regs[2] = select(fd + 1,
-                    rq == SELECT_ONE_READ   ? &fdset : NULL,
-                    rq == SELECT_ONE_WRITE  ? &fdset : NULL,
-                    rq == SELECT_ONE_EXCEPT ? &fdset : NULL,
-                    target_tv ? &tv : NULL);
-            regs[3] = errno_h2g(errno);
+            if (fd < 3 && xtensa_sim_console) {
+                if ((fd == 1 || fd == 2) && rq == SELECT_ONE_WRITE) {
+                    regs[2] = 1;
+                } else {
+                    regs[2] = 0;
+                }
+                regs[3] = 0;
+            } else {
+                fd_set fdset;
+
+                FD_ZERO(&fdset);
+                FD_SET(fd, &fdset);
+                regs[2] = select(fd + 1,
+                                 rq == SELECT_ONE_READ   ? &fdset : NULL,
+                                 rq == SELECT_ONE_WRITE  ? &fdset : NULL,
+                                 rq == SELECT_ONE_EXCEPT ? &fdset : NULL,
+                                 target_tv ? &tv : NULL);
+                regs[3] = errno_h2g(errno);
+            }
         }
         break;
 
     case TARGET_SYS_argc:
-        regs[2] = 1;
+        regs[2] = semihosting_get_argc();
         regs[3] = 0;
         break;
 
     case TARGET_SYS_argv_sz:
-        regs[2] = 128;
-        regs[3] = 0;
+        {
+            int argc = semihosting_get_argc();
+            int sz = (argc + 1) * sizeof(uint32_t);
+            int i;
+
+            for (i = 0; i < argc; ++i) {
+                sz += 1 + strlen(semihosting_get_arg(i));
+            }
+            regs[2] = sz;
+            regs[3] = 0;
+        }
         break;
 
     case TARGET_SYS_argv:
         {
-            struct Argv {
-                uint32_t argptr[2];
-                char text[120];
-            } argv = {
-                {0, 0},
-                "test"
-            };
+            int argc = semihosting_get_argc();
+            int str_offset = (argc + 1) * sizeof(uint32_t);
+            int i;
+            uint32_t argptr;
 
-            argv.argptr[0] = tswap32(regs[3] + offsetof(struct Argv, text));
+            for (i = 0; i < argc; ++i) {
+                const char *str = semihosting_get_arg(i);
+                int str_size = strlen(str) + 1;
+
+                argptr = tswap32(regs[3] + str_offset);
+
+                cpu_memory_rw_debug(cs,
+                                    regs[3] + i * sizeof(uint32_t),
+                                    (uint8_t *)&argptr, sizeof(argptr), 1);
+                cpu_memory_rw_debug(cs,
+                                    regs[3] + str_offset,
+                                    (uint8_t *)str, str_size, 1);
+                str_offset += str_size;
+            }
+            argptr = 0;
             cpu_memory_rw_debug(cs,
-                                regs[3], (uint8_t *)&argv, sizeof(argv), 1);
+                                regs[3] + i * sizeof(uint32_t),
+                                (uint8_t *)&argptr, sizeof(argptr), 1);
+            regs[3] = 0;
         }
         break;
 

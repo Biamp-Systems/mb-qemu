@@ -6,9 +6,9 @@
 #ifndef FDT_GENERIC_H
 #define FDT_GENERIC_H
 
-#include "qemu/osdep.h"
+#include "exec/hwaddr.h"
 #include "qemu-common.h"
-#include "hw/sysbus.h"
+#include "hw/irq.h"
 #include "sysemu/device_tree.h"
 #include "qemu/coroutine.h"
 
@@ -42,7 +42,6 @@ typedef struct FDTMachineInfo {
     hwaddr sysbus_base;
 
     /* recheck coroutine queue */
-    int      routinesPending;
     CoQueue *cq;
     /* list of all IRQ connections */
     FDTIRQConnection *irqs;
@@ -92,9 +91,9 @@ void fdt_init_yield(FDTMachineInfo *);
 
 /* set, check and get per device opaques. Keyed by fdt node_paths */
 
-void fdt_init_set_opaque(FDTMachineInfo *fdti, const char *node_path, void *opaque);
-int fdt_init_has_opaque(FDTMachineInfo *fdti, const char *node_path);
-void *fdt_init_get_opaque(FDTMachineInfo *fdti, const char *node_path);
+void fdt_init_set_opaque(FDTMachineInfo *fdti, char *node_path, void *opaque);
+int fdt_init_has_opaque(FDTMachineInfo *fdti, char *node_path);
+void *fdt_init_get_opaque(FDTMachineInfo *fdti, char *node_path);
 
 /* statically register a FDTInitFn as being associate with a compatibility */
 

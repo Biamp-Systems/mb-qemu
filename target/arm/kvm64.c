@@ -819,6 +819,15 @@ int kvm_arch_get_registers(CPUState *cs)
         ret = kvm_vcpu_ioctl(cs, KVM_GET_ONE_REG, &reg);
         if (ret) {
             return ret;
+        } else {
+            int rd = i << 1;
+#ifdef HOST_WORDS_BIGENDIAN
+            env->vfp.regs[rd + 1] = fp_val[0];
+            env->vfp.regs[rd] = fp_val[1];
+#else
+            env->vfp.regs[rd + 1] = fp_val[1];
+            env->vfp.regs[rd] = fp_val[0];
+#endif
         }
     }
 
@@ -940,7 +949,7 @@ bool kvm_arm_handle_debug(CPUState *cs, struct kvm_debug_exit_arch *debug_exit)
              * single step at this point so something has gone wrong.
              */
             error_report("%s: guest single-step while debugging unsupported"
-                         " (%"PRIx64", %"PRIx32")\n",
+                         " (%"PRIx64", %"PRIx32")",
                          __func__, env->pc, debug_exit->hsr);
             return false;
         }
@@ -965,7 +974,7 @@ bool kvm_arm_handle_debug(CPUState *cs, struct kvm_debug_exit_arch *debug_exit)
         break;
     }
     default:
-        error_report("%s: unhandled debug exit (%"PRIx32", %"PRIx64")\n",
+        error_report("%s: unhandled debug exit (%"PRIx32", %"PRIx64")",
                      __func__, debug_exit->hsr, env->pc);
     }
 

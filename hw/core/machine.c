@@ -17,8 +17,11 @@
 #include "qapi/visitor.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/numa.h"
 #include "qemu/error-report.h"
 #include "qemu/cutils.h"
+#include "sysemu/numa.h"
+#include "sysemu/qtest.h"
 
 static char *machine_get_accel(Object *obj, Error **errp)
 {
@@ -160,6 +163,20 @@ static void machine_set_dtb(Object *obj, const char *value, Error **errp)
     ms->dtb = g_strdup(value);
 }
 
+static char *machine_get_hw_dtb(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return g_strdup(ms->hw_dtb);
+}
+
+static void machine_set_hw_dtb(Object *obj, const char *value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    ms->hw_dtb = g_strdup(value);
+}
+
 static char *machine_get_dumpdtb(Object *obj, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
@@ -229,6 +246,21 @@ static void machine_set_dump_guest_core(Object *obj, bool value, Error **errp)
     MachineState *ms = MACHINE(obj);
 
     ms->dump_guest_core = value;
+}
+
+
+static bool machine_get_linux(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return ms->is_linux;
+}
+
+static void machine_set_linux(Object *obj, bool value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    ms->is_linux = value;
 }
 
 static bool machine_get_mem_merge(Object *obj, Error **errp)
@@ -357,6 +389,133 @@ static void machine_init_notify(Notifier *notifier, void *data)
     foreach_dynamic_sysbus_device(error_on_sysbus_device, NULL);
 }
 
+HotpluggableCPUList *machine_query_hotpluggable_cpus(MachineState *machine)
+{
+    int i;
+    Object *cpu;
+    HotpluggableCPUList *head = NULL;
+    const char *cpu_type;
+
+    cpu = machine->possible_cpus->cpus[0].cpu;
+    assert(cpu); /* Boot cpu is always present */
+    cpu_type = object_get_typename(cpu);
+    for (i = 0; i < machine->possible_cpus->len; i++) {
+        HotpluggableCPUList *list_item = g_new0(typeof(*list_item), 1);
+        HotpluggableCPU *cpu_item = g_new0(typeof(*cpu_item), 1);
+
+        cpu_item->type = g_strdup(cpu_type);
+        cpu_item->vcpus_count = machine->possible_cpus->cpus[i].vcpus_count;
+        cpu_item->props = g_memdup(&machine->possible_cpus->cpus[i].props,
+                                   sizeof(*cpu_item->props));
+
+        cpu = machine->possible_cpus->cpus[i].cpu;
+        if (cpu) {
+            cpu_item->has_qom_path = true;
+            cpu_item->qom_path = object_get_canonical_path(cpu);
+        }
+        list_item->value = cpu_item;
+        list_item->next = head;
+        head = list_item;
+    }
+    return head;
+}
+
+/**
+ * machine_set_cpu_numa_node:
+ * @machine: machine object to modify
+ * @props: specifies which cpu objects to assign to
+ *         numa node specified by @props.node_id
+ * @errp: if an error occurs, a pointer to an area to store the error
+ *
+ * Associate NUMA node specified by @props.node_id with cpu slots that
+ * match socket/core/thread-ids specified by @props. It's recommended to use
+ * query-hotpluggable-cpus.props values to specify affected cpu slots,
+ * which would lead to exact 1:1 mapping of cpu slots to NUMA node.
+ *
+ * However for CLI convenience it's possible to pass in subset of properties,
+ * which would affect all cpu slots that match it.
+ * Ex for pc machine:
+ *    -smp 4,cores=2,sockets=2 -numa node,nodeid=0 -numa node,nodeid=1 \
+ *    -numa cpu,node-id=0,socket_id=0 \
+ *    -numa cpu,node-id=1,socket_id=1
+ * will assign all child cores of socket 0 to node 0 and
+ * of socket 1 to node 1.
+ *
+ * On attempt of reassigning (already assigned) cpu slot to another NUMA node,
+ * return error.
+ * Empty subset is disallowed and function will return with error in this case.
+ */
+void machine_set_cpu_numa_node(MachineState *machine,
+                               const CpuInstanceProperties *props, Error **errp)
+{
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
+    bool match = false;
+    int i;
+
+    if (!mc->possible_cpu_arch_ids) {
+        error_setg(errp, "mapping of CPUs to NUMA node is not supported");
+        return;
+    }
+
+    /* disabling node mapping is not supported, forbid it */
+    assert(props->has_node_id);
+
+    /* force board to initialize possible_cpus if it hasn't been done yet */
+    mc->possible_cpu_arch_ids(machine);
+
+    for (i = 0; i < machine->possible_cpus->len; i++) {
+        CPUArchId *slot = &machine->possible_cpus->cpus[i];
+
+        /* reject unsupported by board properties */
+        if (props->has_thread_id && !slot->props.has_thread_id) {
+            error_setg(errp, "thread-id is not supported");
+            return;
+        }
+
+        if (props->has_core_id && !slot->props.has_core_id) {
+            error_setg(errp, "core-id is not supported");
+            return;
+        }
+
+        if (props->has_socket_id && !slot->props.has_socket_id) {
+            error_setg(errp, "socket-id is not supported");
+            return;
+        }
+
+        /* skip slots with explicit mismatch */
+        if (props->has_thread_id && props->thread_id != slot->props.thread_id) {
+                continue;
+        }
+
+        if (props->has_core_id && props->core_id != slot->props.core_id) {
+                continue;
+        }
+
+        if (props->has_socket_id && props->socket_id != slot->props.socket_id) {
+                continue;
+        }
+
+        /* reject assignment if slot is already assigned, for compatibility
+         * of legacy cpu_index mapping with SPAPR core based mapping do not
+         * error out if cpu thread and matched core have the same node-id */
+        if (slot->props.has_node_id &&
+            slot->props.node_id != props->node_id) {
+            error_setg(errp, "CPU is already assigned to node-id: %" PRId64,
+                       slot->props.node_id);
+            return;
+        }
+
+        /* assign slot to node as it's matched '-numa cpu' key */
+        match = true;
+        slot->props.node_id = props->node_id;
+        slot->props.has_node_id = props->has_node_id;
+    }
+
+    if (!match) {
+        error_setg(errp, "no match found");
+    }
+}
+
 static void machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -364,6 +523,12 @@ static void machine_class_init(ObjectClass *oc, void *data)
     /* Default 128 MB as guest ram size */
     mc->default_ram_size = 128 * M_BYTE;
     mc->rom_file_has_mr = true;
+
+    /* numa node memory size aligned on 8MB by default.
+     * On Linux, each node's border has to be 8MB aligned
+     */
+    mc->numa_mem_align_shift = 23;
+    mc->numa_auto_assign_ram = numa_default_auto_assign_ram;
 
     object_class_property_add_str(oc, "accel",
         machine_get_accel, machine_set_accel, &error_abort);
@@ -485,6 +650,17 @@ static void machine_initfn(Object *obj)
     ms->mem_merge = true;
     ms->enable_graphics = true;
 
+    object_property_add_str(obj, "hw-dtb",
+                            machine_get_hw_dtb, machine_set_hw_dtb, NULL);
+    object_property_set_description(obj, "hw-dtb",
+                                    "A device tree used to describe the hardware to QEMU.",
+                                    NULL);
+    object_property_add_bool(obj, "linux",
+                             machine_get_linux, machine_set_linux, NULL);
+    object_property_set_description(obj, "linux",
+                                    "Force a Linux style boot",
+                                    NULL);
+
     /* Register notifier when init is done for sysbus sanity checks */
     ms->sysbus_notifier.notify = machine_init_notify;
     qemu_add_machine_init_done_notifier(&ms->sysbus_notifier);
@@ -542,6 +718,86 @@ bool machine_dump_guest_core(MachineState *machine)
 bool machine_mem_merge(MachineState *machine)
 {
     return machine->mem_merge;
+}
+
+static char *cpu_slot_to_string(const CPUArchId *cpu)
+{
+    GString *s = g_string_new(NULL);
+    if (cpu->props.has_socket_id) {
+        g_string_append_printf(s, "socket-id: %"PRId64, cpu->props.socket_id);
+    }
+    if (cpu->props.has_core_id) {
+        if (s->len) {
+            g_string_append_printf(s, ", ");
+        }
+        g_string_append_printf(s, "core-id: %"PRId64, cpu->props.core_id);
+    }
+    if (cpu->props.has_thread_id) {
+        if (s->len) {
+            g_string_append_printf(s, ", ");
+        }
+        g_string_append_printf(s, "thread-id: %"PRId64, cpu->props.thread_id);
+    }
+    return g_string_free(s, false);
+}
+
+static void machine_numa_finish_init(MachineState *machine)
+{
+    int i;
+    bool default_mapping;
+    GString *s = g_string_new(NULL);
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
+    const CPUArchIdList *possible_cpus = mc->possible_cpu_arch_ids(machine);
+
+    assert(nb_numa_nodes);
+    for (i = 0; i < possible_cpus->len; i++) {
+        if (possible_cpus->cpus[i].props.has_node_id) {
+            break;
+        }
+    }
+    default_mapping = (i == possible_cpus->len);
+
+    for (i = 0; i < possible_cpus->len; i++) {
+        const CPUArchId *cpu_slot = &possible_cpus->cpus[i];
+
+        if (!cpu_slot->props.has_node_id) {
+            /* fetch default mapping from board and enable it */
+            CpuInstanceProperties props = cpu_slot->props;
+
+            if (!default_mapping) {
+                /* record slots with not set mapping,
+                 * TODO: make it hard error in future */
+                char *cpu_str = cpu_slot_to_string(cpu_slot);
+                g_string_append_printf(s, "%sCPU %d [%s]",
+                                       s->len ? ", " : "", i, cpu_str);
+                g_free(cpu_str);
+
+                /* non mapped cpus used to fallback to node 0 */
+                props.node_id = 0;
+            }
+
+            props.has_node_id = true;
+            machine_set_cpu_numa_node(machine, &props, &error_fatal);
+        }
+    }
+    if (s->len && !qtest_enabled()) {
+        warn_report("CPU(s) not present in any NUMA nodes: %s",
+                    s->str);
+        warn_report("All CPU(s) up to maxcpus should be described "
+                    "in NUMA config, ability to start up with partial NUMA "
+                    "mappings is obsoleted and will be removed in future");
+    }
+    g_string_free(s, true);
+}
+
+void machine_run_board_init(MachineState *machine)
+{
+    MachineClass *machine_class = MACHINE_GET_CLASS(machine);
+
+    if (nb_numa_nodes) {
+        machine_numa_finish_init(machine);
+    }
+    machine_class->init(machine);
 }
 
 static void machine_class_finalize(ObjectClass *klass, void *data)

@@ -14,6 +14,9 @@
 #ifndef MEMATTRS_H
 #define MEMATTRS_H
 
+#include "qom/object.h"
+#include "qapi/visitor-impl.h"
+
 /* Every memory transaction has associated with it a set of
  * attributes. Some of these are generic (such as the ID of
  * the bus master); some are specific to a particular kind of
@@ -23,6 +26,7 @@
  * different semantics.
  */
 typedef struct MemTxAttrs {
+    Object parent_obj;
     /* Bus masters which don't specify any attributes will get this
      * (via the MEMTXATTRS_UNSPECIFIED constant), so that we can
      * distinguish "all attributes deliberately clear" from
@@ -37,6 +41,8 @@ typedef struct MemTxAttrs {
     unsigned int user:1;
     /* Requester ID (for MSI for example) */
     unsigned int requester_id:16;
+
+    uint64_t master_id;
 } MemTxAttrs;
 
 /* Bus masters which don't specify any attributes will get this,
@@ -45,5 +51,8 @@ typedef struct MemTxAttrs {
  * from "didn't specify" if necessary).
  */
 #define MEMTXATTRS_UNSPECIFIED ((MemTxAttrs) { .unspecified = 1 })
+
+void cpu_set_mr(Object *obj, Visitor *v, void *opaque,
+                const char *name, Error **errp);
 
 #endif

@@ -62,6 +62,10 @@ void hmp_info_tlb(Monitor *mon, const QDict *qdict)
 {
     CPUArchState *env1 = mon_get_cpu_env();
 
+    if (!env1) {
+        monitor_printf(mon, "No CPU available\n");
+        return;
+    }
     dump_mmu((FILE*)mon, (fprintf_function)monitor_printf, env1);
 }
 
@@ -111,14 +115,14 @@ int target_get_monitor_def(CPUState *cs, const char *name, uint64_t *pval)
     CPUPPCState *env = &cpu->env;
 
     /* General purpose registers */
-    if ((tolower(name[0]) == 'r') &&
+    if ((qemu_tolower(name[0]) == 'r') &&
         ppc_cpu_get_reg_num(name + 1, ARRAY_SIZE(env->gpr), &regnum)) {
         *pval = env->gpr[regnum];
         return 0;
     }
 
     /* Floating point registers */
-    if ((tolower(name[0]) == 'f') &&
+    if ((qemu_tolower(name[0]) == 'f') &&
         ppc_cpu_get_reg_num(name + 1, ARRAY_SIZE(env->fpr), &regnum)) {
         *pval = env->fpr[regnum];
         return 0;

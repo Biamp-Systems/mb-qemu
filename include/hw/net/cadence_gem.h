@@ -29,6 +29,7 @@
 
 #include "net/net.h"
 #include "hw/sysbus.h"
+#include "hw/mdio/mdio.h"
 
 #define CADENCE_GEM_MAXREG        (0x00000800 / 4) /* Last valid GEM address */
 
@@ -41,7 +42,10 @@ typedef struct CadenceGEMState {
     SysBusDevice parent_obj;
 
     /*< public >*/
+    MemTxAttrs *attr;
     MemoryRegion iomem;
+    MemoryRegion *dma_mr;
+    AddressSpace *dma_as;
     NICState *nic;
     NICConf conf;
     qemu_irq irq[MAX_PRIORITY_QUEUES];
@@ -50,6 +54,7 @@ typedef struct CadenceGEMState {
     uint8_t num_priority_queues;
     uint8_t num_type1_screeners;
     uint8_t num_type2_screeners;
+    uint32_t revision;
 
     /* GEM registers backing store */
     uint32_t regs[CADENCE_GEM_MAXREG];
@@ -73,9 +78,10 @@ typedef struct CadenceGEMState {
 
     uint8_t can_rx_state; /* Debug only */
 
-    unsigned rx_desc[MAX_PRIORITY_QUEUES][2];
+    unsigned rx_desc[MAX_PRIORITY_QUEUES][4];
 
     bool sar_active[4];
+    MDIO *mdio;
 } CadenceGEMState;
 
 #define CADENCE_GEM_H

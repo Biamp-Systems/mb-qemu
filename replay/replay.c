@@ -16,12 +16,13 @@
 #include "replay-internal.h"
 #include "qemu/timer.h"
 #include "qemu/main-loop.h"
+#include "sysemu/cpus.h"
 #include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 
 /* Current version of the replay mechanism.
    Increase it when file format changes. */
-#define REPLAY_VERSION              0xe02005
+#define REPLAY_VERSION              0xe02006
 /* Size of replay log header */
 #define HEADER_SIZE                 (sizeof(uint32_t) + sizeof(uint64_t))
 
@@ -48,9 +49,10 @@ bool replay_next_event_is(int event)
             res = true;
         }
         switch (replay_state.data_kind) {
-        case EVENT_SHUTDOWN:
+        case EVENT_SHUTDOWN ... EVENT_SHUTDOWN_LAST:
             replay_finish_event();
-            qemu_system_shutdown_request();
+            qemu_system_shutdown_request(replay_state.data_kind -
+                                         EVENT_SHUTDOWN);
             break;
         default:
             /* clock, time_t, checkpoint and other events */
@@ -83,6 +85,10 @@ void replay_account_executed_instructions(void)
         if (replay_state.instructions_count > 0) {
             int count = (int)(replay_get_current_step()
                               - replay_state.current_step);
+
+            /* Time can only go forward */
+            assert(count >= 0);
+
             replay_state.instructions_count -= count;
             replay_state.current_step += count;
             if (replay_state.instructions_count == 0) {
@@ -165,11 +171,11 @@ bool replay_has_interrupt(void)
     return res;
 }
 
-void replay_shutdown_request(void)
+void replay_shutdown_request(ShutdownCause cause)
 {
     if (replay_mode == REPLAY_MODE_RECORD) {
         replay_mutex_lock();
-        replay_put_event(EVENT_SHUTDOWN);
+        replay_put_event(EVENT_SHUTDOWN + cause);
         replay_mutex_unlock();
     }
 }

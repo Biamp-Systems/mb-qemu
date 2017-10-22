@@ -774,7 +774,7 @@ static qemu_irq *ppce500_init_mpic(MachineState *machine, PPCE500Params *params,
 static void ppce500_power_off(void *opaque, int line, int on)
 {
     if (on) {
-        qemu_system_shutdown_request();
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
     }
 }
 
@@ -951,7 +951,7 @@ void ppce500_init(MachineState *machine, PPCE500Params *params)
     /* Platform Bus Device */
     if (params->has_platform_bus) {
         dev = qdev_create(NULL, TYPE_PLATFORM_BUS_DEVICE);
-        dev->id = TYPE_PLATFORM_BUS_DEVICE;
+        dev->id = (char *) TYPE_PLATFORM_BUS_DEVICE;
         qdev_prop_set_uint32(dev, "num_irqs", params->platform_bus_num_irqs);
         qdev_prop_set_uint32(dev, "mmio_size", params->platform_bus_size);
         qdev_init_nofail(dev);

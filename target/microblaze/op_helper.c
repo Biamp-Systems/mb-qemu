@@ -24,6 +24,7 @@
 #include "qemu/host-utils.h"
 #include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
+#include "hw/remote-port.h"
 
 #define D(x)
 
@@ -89,6 +90,26 @@ void helper_raise_exception(CPUMBState *env, uint32_t index)
     CPUState *cs = CPU(mb_env_get_cpu(env));
 
     cs->exception_index = index;
+    cpu_loop_exit(cs);
+}
+
+void helper_sleep(CPUMBState *env)
+{
+    MicroBlazeCPU *cpu = mb_env_get_cpu(env);
+    CPUState *cs = CPU(cpu);
+    CPUClass *cc = CPU_GET_CLASS(cs);
+
+    if (cc->has_work(cs)) {
+        cs->exception_index = EXCP_YIELD;
+        cpu_loop_exit(cs);
+        return;
+    }
+
+#if !defined(CONFIG_USER_ONLY)
+    qemu_set_irq(cpu->mb_sleep, true);
+#endif
+    cs->halted = 1;
+    cs->exception_index = EXCP_HLT;
     cpu_loop_exit(cs);
 }
 

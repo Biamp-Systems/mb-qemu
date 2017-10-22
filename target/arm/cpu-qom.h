@@ -32,6 +32,8 @@ struct arm_boot_info;
     OBJECT_CHECK(ARMCPU, (obj), TYPE_ARM_CPU)
 #define ARM_CPU_GET_CLASS(obj) \
     OBJECT_GET_CLASS(ARMCPUClass, (obj), TYPE_ARM_CPU)
+#define ARM_CPU_PARENT_CLASS \
+    object_class_get_parent(object_class_by_name(TYPE_ARM_CPU))
 
 /**
  * ARMCPUClass:

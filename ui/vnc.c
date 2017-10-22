@@ -28,7 +28,6 @@
 #include "vnc.h"
 #include "vnc-jobs.h"
 #include "trace.h"
-#include "hw/qdev.h"
 #include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
@@ -113,26 +112,29 @@ static void vnc_init_basic_info(SocketAddress *addr,
                                 Error **errp)
 {
     switch (addr->type) {
-    case SOCKET_ADDRESS_KIND_INET:
-        info->host = g_strdup(addr->u.inet.data->host);
-        info->service = g_strdup(addr->u.inet.data->port);
-        if (addr->u.inet.data->ipv6) {
+    case SOCKET_ADDRESS_TYPE_INET:
+        info->host = g_strdup(addr->u.inet.host);
+        info->service = g_strdup(addr->u.inet.port);
+        if (addr->u.inet.ipv6) {
             info->family = NETWORK_ADDRESS_FAMILY_IPV6;
         } else {
             info->family = NETWORK_ADDRESS_FAMILY_IPV4;
         }
         break;
 
-    case SOCKET_ADDRESS_KIND_UNIX:
+    case SOCKET_ADDRESS_TYPE_UNIX:
         info->host = g_strdup("");
-        info->service = g_strdup(addr->u.q_unix.data->path);
+        info->service = g_strdup(addr->u.q_unix.path);
         info->family = NETWORK_ADDRESS_FAMILY_UNIX;
         break;
 
-    default:
-        error_setg(errp, "Unsupported socket kind %d",
-                   addr->type);
+    case SOCKET_ADDRESS_TYPE_VSOCK:
+    case SOCKET_ADDRESS_TYPE_FD:
+        error_setg(errp, "Unsupported socket address type %s",
+                   SocketAddressType_lookup[addr->type]);
         break;
+    default:
+        abort();
     }
 
     return;
@@ -395,26 +397,29 @@ VncInfo *qmp_query_vnc(Error **errp)
         }
 
         switch (addr->type) {
-        case SOCKET_ADDRESS_KIND_INET:
-            info->host = g_strdup(addr->u.inet.data->host);
-            info->service = g_strdup(addr->u.inet.data->port);
-            if (addr->u.inet.data->ipv6) {
+        case SOCKET_ADDRESS_TYPE_INET:
+            info->host = g_strdup(addr->u.inet.host);
+            info->service = g_strdup(addr->u.inet.port);
+            if (addr->u.inet.ipv6) {
                 info->family = NETWORK_ADDRESS_FAMILY_IPV6;
             } else {
                 info->family = NETWORK_ADDRESS_FAMILY_IPV4;
             }
             break;
 
-        case SOCKET_ADDRESS_KIND_UNIX:
+        case SOCKET_ADDRESS_TYPE_UNIX:
             info->host = g_strdup("");
-            info->service = g_strdup(addr->u.q_unix.data->path);
+            info->service = g_strdup(addr->u.q_unix.path);
             info->family = NETWORK_ADDRESS_FAMILY_UNIX;
             break;
 
-        default:
-            error_setg(errp, "Unsupported socket kind %d",
-                       addr->type);
+        case SOCKET_ADDRESS_TYPE_VSOCK:
+        case SOCKET_ADDRESS_TYPE_FD:
+            error_setg(errp, "Unsupported socket address type %s",
+                       SocketAddressType_lookup[addr->type]);
             goto out_error;
+        default:
+            abort();
         }
 
         info->has_host = true;
@@ -892,105 +897,6 @@ int vnc_send_framebuffer_update(VncState *vs, int x, int y, int w, int h)
     }
 
     return n;
-}
-
-static void vnc_copy(VncState *vs, int src_x, int src_y, int dst_x, int dst_y, int w, int h)
-{
-    /* send bitblit op to the vnc client */
-    vnc_lock_output(vs);
-    vnc_write_u8(vs, VNC_MSG_SERVER_FRAMEBUFFER_UPDATE);
-    vnc_write_u8(vs, 0);
-    vnc_write_u16(vs, 1); /* number of rects */
-    vnc_framebuffer_update(vs, dst_x, dst_y, w, h, VNC_ENCODING_COPYRECT);
-    vnc_write_u16(vs, src_x);
-    vnc_write_u16(vs, src_y);
-    vnc_unlock_output(vs);
-    vnc_flush(vs);
-}
-
-static void vnc_dpy_copy(DisplayChangeListener *dcl,
-                         int src_x, int src_y,
-                         int dst_x, int dst_y, int w, int h)
-{
-    VncDisplay *vd = container_of(dcl, VncDisplay, dcl);
-    VncState *vs, *vn;
-    uint8_t *src_row;
-    uint8_t *dst_row;
-    int i, x, y, pitch, inc, w_lim, s;
-    int cmp_bytes;
-
-    if (!vd->server) {
-        /* no client connected */
-        return;
-    }
-
-    vnc_refresh_server_surface(vd);
-    QTAILQ_FOREACH_SAFE(vs, &vd->clients, next, vn) {
-        if (vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
-            vs->force_update = 1;
-            vnc_update_client(vs, 1, true);
-            /* vs might be free()ed here */
-        }
-    }
-
-    if (!vd->server) {
-        /* no client connected */
-        return;
-    }
-    /* do bitblit op on the local surface too */
-    pitch = vnc_server_fb_stride(vd);
-    src_row = vnc_server_fb_ptr(vd, src_x, src_y);
-    dst_row = vnc_server_fb_ptr(vd, dst_x, dst_y);
-    y = dst_y;
-    inc = 1;
-    if (dst_y > src_y) {
-        /* copy backwards */
-        src_row += pitch * (h-1);
-        dst_row += pitch * (h-1);
-        pitch = -pitch;
-        y = dst_y + h - 1;
-        inc = -1;
-    }
-    w_lim = w - (VNC_DIRTY_PIXELS_PER_BIT - (dst_x % VNC_DIRTY_PIXELS_PER_BIT));
-    if (w_lim < 0) {
-        w_lim = w;
-    } else {
-        w_lim = w - (w_lim % VNC_DIRTY_PIXELS_PER_BIT);
-    }
-    for (i = 0; i < h; i++) {
-        for (x = 0; x <= w_lim;
-                x += s, src_row += cmp_bytes, dst_row += cmp_bytes) {
-            if (x == w_lim) {
-                if ((s = w - w_lim) == 0)
-                    break;
-            } else if (!x) {
-                s = (VNC_DIRTY_PIXELS_PER_BIT -
-                    (dst_x % VNC_DIRTY_PIXELS_PER_BIT));
-                s = MIN(s, w_lim);
-            } else {
-                s = VNC_DIRTY_PIXELS_PER_BIT;
-            }
-            cmp_bytes = s * VNC_SERVER_FB_BYTES;
-            if (memcmp(src_row, dst_row, cmp_bytes) == 0)
-                continue;
-            memmove(dst_row, src_row, cmp_bytes);
-            QTAILQ_FOREACH(vs, &vd->clients, next) {
-                if (!vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
-                    set_bit(((x + dst_x) / VNC_DIRTY_PIXELS_PER_BIT),
-                            vs->dirty[y]);
-                }
-            }
-        }
-        src_row += pitch - w * VNC_SERVER_FB_BYTES;
-        dst_row += pitch - w * VNC_SERVER_FB_BYTES;
-        y += inc;
-    }
-
-    QTAILQ_FOREACH(vs, &vd->clients, next) {
-        if (vnc_has_feature(vs, VNC_FEATURE_COPYRECT)) {
-            vnc_copy(vs, src_x, src_y, dst_x, dst_y, w, h);
-        }
-    }
 }
 
 static void vnc_mouse_set(DisplayChangeListener *dcl,
@@ -1649,8 +1555,8 @@ static void pointer_event(VncState *vs, int button_mask, int x, int y)
     }
 
     if (vs->absolute) {
-        qemu_input_queue_abs(con, INPUT_AXIS_X, x, width);
-        qemu_input_queue_abs(con, INPUT_AXIS_Y, y, height);
+        qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, width);
+        qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, height);
     } else if (vnc_has_feature(vs, VNC_FEATURE_POINTER_TYPE_CHANGE)) {
         qemu_input_queue_rel(con, INPUT_AXIS_X, x - 0x7FFF);
         qemu_input_queue_rel(con, INPUT_AXIS_Y, y - 0x7FFF);
@@ -2154,15 +2060,15 @@ static void set_pixel_format(VncState *vs, int bits_per_pixel,
     }
 
     vs->client_pf.rmax = red_max ? red_max : 0xFF;
-    vs->client_pf.rbits = hweight_long(red_max);
+    vs->client_pf.rbits = ctpopl(red_max);
     vs->client_pf.rshift = red_shift;
     vs->client_pf.rmask = red_max << red_shift;
     vs->client_pf.gmax = green_max ? green_max : 0xFF;
-    vs->client_pf.gbits = hweight_long(green_max);
+    vs->client_pf.gbits = ctpopl(green_max);
     vs->client_pf.gshift = green_shift;
     vs->client_pf.gmask = green_max << green_shift;
     vs->client_pf.bmax = blue_max ? blue_max : 0xFF;
-    vs->client_pf.bbits = hweight_long(blue_max);
+    vs->client_pf.bbits = ctpopl(blue_max);
     vs->client_pf.bshift = blue_shift;
     vs->client_pf.bmask = blue_max << blue_shift;
     vs->client_pf.bits_per_pixel = bits_per_pixel;
@@ -3120,7 +3026,6 @@ static gboolean vnc_listen_io(QIOChannel *ioc,
 static const DisplayChangeListenerOps dcl_ops = {
     .dpy_name             = "vnc",
     .dpy_refresh          = vnc_refresh,
-    .dpy_gfx_copy         = vnc_dpy_copy,
     .dpy_gfx_update       = vnc_dpy_update,
     .dpy_gfx_switch       = vnc_dpy_switch,
     .dpy_gfx_check_format = qemu_pixman_check_format,
@@ -3181,6 +3086,7 @@ static void vnc_display_close(VncDisplay *vd)
     g_free(vd->lsock);
     g_free(vd->lsock_tag);
     vd->lsock = NULL;
+    vd->lsock_tag = NULL;
     vd->nlsock = 0;
 
     for (i = 0; i < vd->nlwebsock; i++) {
@@ -3192,6 +3098,7 @@ static void vnc_display_close(VncDisplay *vd)
     g_free(vd->lwebsock);
     g_free(vd->lwebsock_tag);
     vd->lwebsock = NULL;
+    vd->lwebsock_tag = NULL;
     vd->nlwebsock = 0;
 
     vd->auth = VNC_AUTH_INVALID;
@@ -3204,6 +3111,7 @@ static void vnc_display_close(VncDisplay *vd)
     vd->tlsaclname = NULL;
     if (vd->lock_key_sync) {
         qemu_remove_led_event_handler(vd->led);
+        vd->led = NULL;
     }
 }
 
@@ -3252,13 +3160,13 @@ static void vnc_display_print_local_addr(VncDisplay *vd)
         return;
     }
 
-    if (addr->type != SOCKET_ADDRESS_KIND_INET) {
+    if (addr->type != SOCKET_ADDRESS_TYPE_INET) {
         qapi_free_SocketAddress(addr);
         return;
     }
     error_printf_unless_qmp("VNC server running on %s:%s\n",
-                            addr->u.inet.data->host,
-                            addr->u.inet.data->port);
+                            addr->u.inet.host,
+                            addr->u.inet.port);
     qapi_free_SocketAddress(addr);
 }
 
@@ -3498,6 +3406,7 @@ vnc_display_create_creds(bool x509,
 
 static int vnc_display_get_address(const char *addrstr,
                                    bool websocket,
+                                   bool reverse,
                                    int displaynum,
                                    int to,
                                    bool has_ipv4,
@@ -3513,9 +3422,8 @@ static int vnc_display_get_address(const char *addrstr,
     addr = g_new0(SocketAddress, 1);
 
     if (strncmp(addrstr, "unix:", 5) == 0) {
-        addr->type = SOCKET_ADDRESS_KIND_UNIX;
-        addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
-        addr->u.q_unix.data->path = g_strdup(addrstr + 5);
+        addr->type = SOCKET_ADDRESS_TYPE_UNIX;
+        addr->u.q_unix.path = g_strdup(addrstr + 5);
 
         if (websocket) {
             error_setg(errp, "UNIX sockets not supported with websock");
@@ -3551,8 +3459,8 @@ static int vnc_display_get_address(const char *addrstr,
             }
         }
 
-        addr->type = SOCKET_ADDRESS_KIND_INET;
-        inet = addr->u.inet.data = g_new0(InetSocketAddress, 1);
+        addr->type = SOCKET_ADDRESS_TYPE_INET;
+        inet = &addr->u.inet;
         if (addrstr[0] == '[' && addrstr[hostlen - 1] == ']') {
             inet->host = g_strndup(addrstr + 1, hostlen - 2);
         } else {
@@ -3577,21 +3485,22 @@ static int vnc_display_get_address(const char *addrstr,
                 inet->port = g_strdup(port);
             }
         } else {
+            int offset = reverse ? 0 : 5900;
             if (parse_uint_full(port, &baseport, 10) < 0) {
                 error_setg(errp, "can't convert to a number: %s", port);
                 goto cleanup;
             }
             if (baseport > 65535 ||
-                baseport + 5900 > 65535) {
+                baseport + offset > 65535) {
                 error_setg(errp, "port %s out of range", port);
                 goto cleanup;
             }
             inet->port = g_strdup_printf(
-                "%d", (int)baseport + 5900);
+                "%d", (int)baseport + offset);
 
             if (to) {
                 inet->has_to = true;
-                inet->to = to + 5900;
+                inet->to = to + offset;
             }
         }
 
@@ -3612,7 +3521,22 @@ static int vnc_display_get_address(const char *addrstr,
     return ret;
 }
 
+static void vnc_free_addresses(SocketAddress ***retsaddr,
+                               size_t *retnsaddr)
+{
+    size_t i;
+
+    for (i = 0; i < *retnsaddr; i++) {
+        qapi_free_SocketAddress((*retsaddr)[i]);
+    }
+    g_free(*retsaddr);
+
+    *retsaddr = NULL;
+    *retnsaddr = 0;
+}
+
 static int vnc_display_get_addresses(QemuOpts *opts,
+                                     bool reverse,
                                      SocketAddress ***retsaddr,
                                      size_t *retnsaddr,
                                      SocketAddress ***retwsaddr,
@@ -3628,7 +3552,6 @@ static int vnc_display_get_addresses(QemuOpts *opts,
     bool has_ipv6 = qemu_opt_get(opts, "ipv6");
     bool ipv4 = qemu_opt_get_bool(opts, "ipv4", false);
     bool ipv6 = qemu_opt_get_bool(opts, "ipv6", false);
-    size_t i;
     int displaynum = -1;
     int ret = -1;
 
@@ -3652,7 +3575,7 @@ static int vnc_display_get_addresses(QemuOpts *opts,
     qemu_opt_iter_init(&addriter, opts, "vnc");
     while ((addr = qemu_opt_iter_next(&addriter)) != NULL) {
         int rv;
-        rv = vnc_display_get_address(addr, false, 0, to,
+        rv = vnc_display_get_address(addr, false, reverse, 0, to,
                                      has_ipv4, has_ipv6,
                                      ipv4, ipv6,
                                      &saddr, errp);
@@ -3677,7 +3600,7 @@ static int vnc_display_get_addresses(QemuOpts *opts,
 
     qemu_opt_iter_init(&addriter, opts, "websocket");
     while ((addr = qemu_opt_iter_next(&addriter)) != NULL) {
-        if (vnc_display_get_address(addr, true, displaynum, to,
+        if (vnc_display_get_address(addr, true, reverse, displaynum, to,
                                     has_ipv4, has_ipv6,
                                     ipv4, ipv6,
                                     &wsaddr, errp) < 0) {
@@ -3689,13 +3612,12 @@ static int vnc_display_get_addresses(QemuOpts *opts,
          * address for websocket too
          */
         if (*retnsaddr == 1 &&
-            (*retsaddr)[0]->type == SOCKET_ADDRESS_KIND_INET &&
-            wsaddr->type == SOCKET_ADDRESS_KIND_INET &&
-            g_str_equal(wsaddr->u.inet.data->host, "") &&
-            !g_str_equal((*retsaddr)[0]->u.inet.data->host, "")) {
-            g_free(wsaddr->u.inet.data->host);
-            wsaddr->u.inet.data->host =
-                g_strdup((*retsaddr)[0]->u.inet.data->host);
+            (*retsaddr)[0]->type == SOCKET_ADDRESS_TYPE_INET &&
+            wsaddr->type == SOCKET_ADDRESS_TYPE_INET &&
+            g_str_equal(wsaddr->u.inet.host, "") &&
+            !g_str_equal((*retsaddr)[0]->u.inet.host, "")) {
+            g_free(wsaddr->u.inet.host);
+            wsaddr->u.inet.host = g_strdup((*retsaddr)[0]->u.inet.host);
         }
 
         *retwsaddr = g_renew(SocketAddress *, *retwsaddr, *retnwsaddr + 1);
@@ -3705,16 +3627,8 @@ static int vnc_display_get_addresses(QemuOpts *opts,
     ret = 0;
  cleanup:
     if (ret < 0) {
-        for (i = 0; i < *retnsaddr; i++) {
-            qapi_free_SocketAddress((*retsaddr)[i]);
-        }
-        g_free(*retsaddr);
-        for (i = 0; i < *retnwsaddr; i++) {
-            qapi_free_SocketAddress((*retwsaddr)[i]);
-        }
-        g_free(*retwsaddr);
-        *retsaddr = *retwsaddr = NULL;
-        *retnsaddr = *retnwsaddr = 0;
+        vnc_free_addresses(retsaddr, retnsaddr);
+        vnc_free_addresses(retwsaddr, retnwsaddr);
     }
     return ret;
 }
@@ -3736,7 +3650,8 @@ static int vnc_display_connect(VncDisplay *vd,
         error_setg(errp, "Expected a single address in reverse mode");
         return -1;
     }
-    vd->is_unix = saddr[0]->type == SOCKET_ADDRESS_KIND_UNIX;
+    /* TODO SOCKET_ADDRESS_TYPE_FD when fd has AF_UNIX */
+    vd->is_unix = saddr[0]->type == SOCKET_ADDRESS_TYPE_UNIX;
     sioc = qio_channel_socket_new();
     qio_channel_set_name(QIO_CHANNEL(sioc), "vnc-reverse");
     if (qio_channel_socket_connect_sync(sioc, saddr[0], errp) < 0) {
@@ -3774,6 +3689,7 @@ static int vnc_display_listen_addr(VncDisplay *vd,
         qio_channel_set_name(QIO_CHANNEL(sioc), name);
         if (qio_channel_socket_listen_sync(
                 sioc, rawaddrs[i], listenerr == NULL ? &listenerr : NULL) < 0) {
+            object_unref(OBJECT(sioc));
             continue;
         }
         listening = true;
@@ -3861,7 +3777,6 @@ void vnc_display_open(const char *id, Error **errp)
     int acl = 0;
     int lock_key_sync = 1;
     int key_delay_ms;
-    size_t i;
 
     if (!vd) {
         error_setg(errp, "VNC display not active");
@@ -3873,13 +3788,10 @@ void vnc_display_open(const char *id, Error **errp)
         return;
     }
 
-    if (vnc_display_get_addresses(opts, &saddr, &nsaddr,
+    reverse = qemu_opt_get_bool(opts, "reverse", false);
+    if (vnc_display_get_addresses(opts, reverse, &saddr, &nsaddr,
                                   &wsaddr, &nwsaddr, errp) < 0) {
         goto fail;
-    }
-
-    if (saddr == NULL) {
-        return;
     }
 
     password = qemu_opt_get_bool(opts, "password", false);
@@ -3899,9 +3811,8 @@ void vnc_display_open(const char *id, Error **errp)
         }
     }
 
-    reverse = qemu_opt_get_bool(opts, "reverse", false);
     lock_key_sync = qemu_opt_get_bool(opts, "lock-key-sync", true);
-    key_delay_ms = qemu_opt_get_number(opts, "key-delay-ms", 1);
+    key_delay_ms = qemu_opt_get_number(opts, "key-delay-ms", 10);
     sasl = qemu_opt_get_bool(opts, "sasl", false);
 #ifndef CONFIG_VNC_SASL
     if (sasl) {
@@ -4067,6 +3978,10 @@ void vnc_display_open(const char *id, Error **errp)
         register_displaychangelistener(&vd->dcl);
     }
 
+    if (saddr == NULL) {
+        goto cleanup;
+    }
+
     if (reverse) {
         if (vnc_display_connect(vd, saddr, nsaddr, wsaddr, nwsaddr, errp) < 0) {
             goto fail;
@@ -4082,12 +3997,8 @@ void vnc_display_open(const char *id, Error **errp)
     }
 
  cleanup:
-    for (i = 0; i < nsaddr; i++) {
-        qapi_free_SocketAddress(saddr[i]);
-    }
-    for (i = 0; i < nwsaddr; i++) {
-        qapi_free_SocketAddress(wsaddr[i]);
-    }
+    vnc_free_addresses(&saddr, &nsaddr);
+    vnc_free_addresses(&wsaddr, &nwsaddr);
     return;
 
 fail:

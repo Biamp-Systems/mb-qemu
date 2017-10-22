@@ -22,19 +22,12 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
+#include "qemu/main-loop.h"
 #include "qemu-common.h"
 #include "hw/irq.h"
 #include "qom/object.h"
 
 #define IRQ(obj) OBJECT_CHECK(struct IRQState, (obj), TYPE_IRQ)
-
-struct IRQState {
-    Object parent_obj;
-
-    qemu_irq_handler handler;
-    void *opaque;
-    int n;
-};
 
 void qemu_set_irq(qemu_irq irq, int level)
 {

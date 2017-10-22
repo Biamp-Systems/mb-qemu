@@ -25,13 +25,17 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/osdep.h"
 #include "hw/fdt_generic_util.h"
 #include "hw/fdt_generic_devices.h"
 #include "net/net.h"
-#include "block/block.h"
+#include "exec/memory.h"
+#include "exec/address-spaces.h"
+#include "hw/sysbus.h"
 #include "qapi/error.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/blockdev.h"
+#include "chardev/char.h"
 #include "qemu/log.h"
 #include "qemu/config-file.h"
 #include "qom/cpu.h"
@@ -53,12 +57,17 @@
     } \
 } while (0);
 
+#include "hw/remote-port-device.h"
+#include "hw/remote-port.h"
 
 /* FIXME: wrap direct calls into libfdt */
 
 #include <libfdt.h>
+#include <stdlib.h>
 
 int fdt_serial_ports;
+
+static int simple_bus_fdt_init(char *bus_node_path, FDTMachineInfo *fdti);
 
 static void fdt_get_irq_info_from_intc(FDTMachineInfo *fdti, qemu_irq *ret,
                                        char *intc_node_path,
@@ -179,8 +188,9 @@ FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
     if (!qemu_fdt_get_root_node(fdt, node_path)) {
         memory_region_transaction_begin();
         fdt_init_set_opaque(fdti, node_path, NULL);
-        simple_bus_fdt_init(node_path, fdti, NULL);
+        simple_bus_fdt_init(node_path, fdti);
         while (qemu_co_enter_next(fdti->cq));
+        bdrv_drain_all();
         fdt_init_all_irqs(fdti);
         memory_region_transaction_commit();
     } else {
@@ -202,6 +212,7 @@ FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
 
 struct FDTInitNodeArgs {
     char *node_path;
+    char *parent_path;
     FDTMachineInfo *fdti;
 };
 
@@ -209,26 +220,24 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat);
 
 static void fdt_init_node(void *args)
 {
-
     struct FDTInitNodeArgs *a = args;
     char *node_path = a->node_path;
     FDTMachineInfo *fdti = a->fdti;
     g_free(a);
 
+    simple_bus_fdt_init(node_path, fdti);
+
     char *all_compats = NULL, *compat, *node_name, *next_compat;
+    char *device_type = NULL;
     int compat_len;
 
-#ifdef FDT_GENERIC_UTIL_ERR_DEBUG
-    static int entry_index;
-    int this_entry = entry_index++;
-#endif
     DB_PRINT_NP(1, "enter\n");
 
     /* try instance binding first */
     node_name = qemu_fdt_get_node_name(fdti->fdt, node_path);
     DB_PRINT_NP(1, "node with name: %s\n", node_name ? node_name : "(none)");
     if (!node_name) {
-        fprintf(stderr, "FDT: ERROR: nameless node: %s\n", node_path);
+        printf("FDT: ERROR: nameless node: %s\n", node_path);
     }
     if (!fdt_init_inst_bind(node_path, fdti, node_name)) {
         DB_PRINT_NP(0, "instance bind successful\n");
@@ -236,35 +245,46 @@ static void fdt_init_node(void *args)
     }
 
     /* fallback to compatibility binding */
-    all_compats = qemu_fdt_getprop(fdti->fdt, node_path,
-        "compatible", &compat_len, false, NULL);
+    all_compats = qemu_fdt_getprop(fdti->fdt, node_path, "compatible",
+                                   &compat_len, false, NULL);
     if (!all_compats) {
-        fprintf(stderr, "FDT: ERROR: no compatibility found for node %s/%s\n", node_path,
-            node_name);
-        DB_PRINT(1, "exit %d\n", this_entry);
-        fdti->routinesPending--;
-        return;
+        DB_PRINT_NP(0, "no compatibility found\n");
     }
-    compat = all_compats;
 
-try_next_compat:
-    if (compat_len == 0) {
-        goto invalidate;
+    for (compat = all_compats; compat && compat_len; compat = next_compat+1) {
+        char *compat_prefixed = g_strdup_printf("compatible:%s", compat);
+        if (!fdt_init_compat(node_path, fdti, compat_prefixed)) {
+            goto exit;
+        }
+        g_free(compat_prefixed);
+        if (!fdt_init_qdev(node_path, fdti, compat)) {
+            goto exit;
+        }
+        next_compat = memchr(compat, '\0', DT_PATH_LENGTH);
+        compat_len -= (next_compat + 1 - compat);
+        if (compat_len > 0) {
+            *next_compat = ' ';
+        }
     }
-    if (!fdt_init_compat(node_path, fdti, compat)) {
+
+    device_type = qemu_fdt_getprop(fdti->fdt, node_path,
+                                   "device_type", NULL, false, NULL);
+    device_type = g_strdup_printf("device_type:%s", device_type);
+    if (!fdt_init_compat(node_path, fdti, device_type)) {
         goto exit;
     }
-    if (!fdt_init_qdev(node_path, fdti, compat)) {
+
+    /* Try to create the device using device_type property
+     * Not every device tree node has compatible  property, so
+     * try with device_type.
+     */
+    if (!fdt_init_qdev(node_path, fdti, device_type)) {
         goto exit;
     }
-    next_compat = rawmemchr(compat, '\0');
-    compat_len -= (next_compat + 1 - compat);
-    if (compat_len > 0) {
-        *next_compat = ' ';
+
+    if (!all_compats) {
+        goto exit;
     }
-    compat = next_compat+1;
-    goto try_next_compat;
-invalidate:
     DB_PRINT_NP(0, "FDT: Unsupported peripheral invalidated - "
                 "compatibilities %s\n", all_compats);
     qemu_fdt_setprop_string(fdti->fdt, node_path, "compatible", "invalidated");
@@ -277,16 +297,15 @@ exit:
     }
     g_free(node_path);
     g_free(all_compats);
-    fdti->routinesPending--;
+    g_free(device_type);
     return;
 }
 
-int simple_bus_fdt_init(char *node_path, FDTMachineInfo *fdti, void *unused)
+static int simple_bus_fdt_init(char *node_path, FDTMachineInfo *fdti)
 {
     int i;
     int num_children = qemu_fdt_get_num_children(fdti->fdt, node_path, 1);
     char **children = qemu_fdt_get_children(fdti->fdt, node_path, 1);
-    int initialRoutinesPending = fdti->routinesPending;
 
     DB_PRINT_NP(num_children ? 0 : 1, "num child devices: %d\n", num_children);
 
@@ -294,12 +313,7 @@ int simple_bus_fdt_init(char *node_path, FDTMachineInfo *fdti, void *unused)
         struct FDTInitNodeArgs *init_args = g_malloc0(sizeof(*init_args));
         init_args->node_path = children[i];
         init_args->fdti = fdti;
-        fdti->routinesPending++;
         qemu_coroutine_enter(qemu_coroutine_create(fdt_init_node, init_args));
-    }
-
-    if (fdti->routinesPending != initialRoutinesPending) {
-        bdrv_drain_all();
     }
 
     g_free(children);
@@ -895,11 +909,11 @@ static const int fdt_generic_reg_cells_defaults[] = {
 static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
 {
     Object *dev, *parent;
-    int offset;
     char *dev_type = NULL;
     int is_intc;
     Error *errp = NULL;
     int i, j;
+    QEMUDevtreeProp *prop, *props;
     char parent_node_path[DT_PATH_LENGTH];
     const FDTGenericGPIOSet *gpio_set = NULL;
     FDTGenericGPIOClass *fggc = NULL;
@@ -975,22 +989,34 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
     }
     fdt_init_set_opaque(fdti, node_path, dev);
 
-    offset = fdt_path_offset(fdti->fdt, node_path);
-    for (offset = fdt_first_property_offset(fdti->fdt, offset);
-            offset != -FDT_ERR_NOTFOUND;
-            offset = fdt_next_property_offset(fdti->fdt, offset)) {
-        const char *propname;
-        int len;
-        const void *val = fdt_getprop_by_offset(fdti->fdt, offset,
-                                                    &propname, &len);
+    /* Set the default sync-quantum based on the global one. Node properties
+     * in the dtb can later override this value.  */
+    if (global_sync_quantum) {
+        ObjectProperty *p;
 
-        propname = trim_vendor(propname);
+        p = object_property_find(OBJECT(dev), "sync-quantum", NULL);
+        if (p) {
+            object_property_set_int(OBJECT(dev), global_sync_quantum,
+                                    "sync-quantum", &errp);
+        }
+    }
+
+    props = qemu_fdt_get_props(fdti->fdt, node_path);
+    for (prop = props; prop->name; prop++) {
+        const char *propname = trim_vendor(prop->name);
+        int len = prop->len;
+        void *val = prop->value;
+
         ObjectProperty *p = object_property_find(OBJECT(dev), propname, NULL);
         if (p) {
             DB_PRINT_NP(1, "matched property: %s of type %s, len %d\n",
-                                            propname, p->type, len);
+                                            propname, p->type, prop->len);
         }
         if (!p) {
+            continue;
+        }
+
+        if (!strcmp(propname, "type")) {
             continue;
         }
 
@@ -1003,11 +1029,16 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
                                     propname, &error_abort);
             DB_PRINT_NP(0, "set property %s to %#llx\n", propname,
                         (unsigned long long)get_int_be(val, len));
-        } else if (!strcmp(p->type, "bool")) {
+        } else if (!strcmp(p->type, "boolean") || !strcmp(p->type, "bool")) {
             object_property_set_bool(OBJECT(dev), !!get_int_be(val, len),
-                        propname, &error_abort);
+                                     propname, &error_abort);
             DB_PRINT_NP(0, "set property %s to %s\n", propname,
                         get_int_be(val, len) ? "true" : "false");
+        } else if (!strcmp(p->type, "string") || !strcmp(p->type, "str")) {
+            object_property_set_str(OBJECT(dev), (const char *)val, propname,
+                                    &error_abort);
+            DB_PRINT_NP(0, "set property %s to %s\n", propname,
+                        (const char *)val);
         } else if (!strncmp(p->type, "link", 4)) {
             char target_node_path[DT_PATH_LENGTH];
             char propname_target[1024];
@@ -1060,6 +1091,71 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
         }
     }
 
+    /* FIXME: not pretty, but is half a sane dts binding */
+    if (object_dynamic_cast(dev, TYPE_REMOTE_PORT_DEVICE)) {
+        int i;
+
+        for (i = 0;;++i) {
+            char adaptor_node_path[DT_PATH_LENGTH];
+            uint32_t adaptor_phandle, chan;
+            DeviceState *adaptor;
+            char *name;
+
+            adaptor_phandle = qemu_fdt_getprop_cell(fdti->fdt, node_path,
+                                                    "remote-ports", NULL,
+                                                    2 * i, false, &errp);
+            if (errp) {
+                DB_PRINT_NP(1, "cant get phandle from \"remote-ports\" "
+                            "property\n");
+                break;
+            }
+            if (qemu_fdt_get_node_by_phandle(fdti->fdt, adaptor_node_path,
+                                                 adaptor_phandle)) {
+                DB_PRINT_NP(1, "cant get node from phandle\n");
+                break;
+            }
+            adaptor = DEVICE(fdt_init_get_opaque(fdti, adaptor_node_path));
+            name = g_strdup_printf("rp-adaptor%" PRId32, i);
+            object_property_set_link(OBJECT(dev), OBJECT(adaptor), name, &errp);
+            DB_PRINT_NP(0, "connecting RP to adaptor %s channel %d",
+                        object_get_canonical_path(OBJECT(adaptor)), i);
+            g_free(name);
+            if (errp) {
+                DB_PRINT_NP(1, "cant set adaptor link for device property\n");
+                break;
+            }
+
+            chan = qemu_fdt_getprop_cell(fdti->fdt, node_path, "remote-ports",
+                                         NULL, 2 * i + 1, false, &errp);
+            if (errp) {
+                DB_PRINT_NP(1, "cant get channel from \"remote-ports\" "
+                            "property\n");
+                break;
+            }
+
+            name = g_strdup_printf("rp-chan%" PRId32, i);
+            object_property_set_int(OBJECT(dev), chan, name, &errp);
+            /* Not critical - device has right to not care about channel
+             * numbers if its a pure slave (only responses).
+             */
+            if (errp) {
+                DB_PRINT_NP(1, "cant set %s property %s\n", name, error_get_pretty(errp));
+                errp = NULL;
+            }
+            g_free(name);
+
+            name = g_strdup_printf("remote-port-dev%d", chan);
+            object_property_set_link(OBJECT(adaptor), OBJECT(dev), name,
+                                     &errp);
+            g_free(name);
+            if (errp) {
+                DB_PRINT_NP(1, "cant set device link for adaptor\n");
+                break;
+            }
+        }
+        errp = NULL;
+    }
+
     if (object_dynamic_cast(dev, TYPE_DEVICE)) {
         DeviceClass *dc = DEVICE_GET_CLASS(dev);
         /* connect nic if appropriate */
@@ -1073,6 +1169,24 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
         if (nd_table[nics].instantiated) {
             DB_PRINT_NP(0, "NIC instantiated: %s\n", dev_type);
             nics++;
+        }
+
+        /* We don't want to connect remote port chardev's to the user facing
+         * serial devices.
+         */
+        if (!object_dynamic_cast(dev, TYPE_REMOTE_PORT)) {
+            /* Connect chardev if we can */
+            if (fdt_serial_ports < MAX_SERIAL_PORTS && serial_hds[fdt_serial_ports]) {
+                Chardev *value = (Chardev*) serial_hds[fdt_serial_ports];
+
+                object_property_set_str(dev, value->label, "chardev", &errp);
+                if (!errp) {
+                    /* It worked, the device is a charecter device */
+                    fdt_serial_ports++;
+                }
+
+                errp = NULL;
+            }
         }
 
         /* We also need to externally connect drives. Let's try to do that
@@ -1343,5 +1457,3 @@ static void fdt_generic_intc_register_types(void)
 }
 
 type_init(fdt_generic_intc_register_types)
-
-fdt_register_compatibility(simple_bus_fdt_init, "simple-bus");

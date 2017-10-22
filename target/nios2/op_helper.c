@@ -23,6 +23,7 @@
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
 #include "hw/nios2/nios2_iic.h"
+#include "qemu/main-loop.h"
 
 #if !defined(CONFIG_USER_ONLY)
 void helper_mmu_read_debug(CPUNios2State *env, uint32_t rn)
@@ -37,14 +38,18 @@ void helper_mmu_write(CPUNios2State *env, uint32_t rn, uint32_t v)
 
 void helper_cr_ienable_write(CPUNios2State *env, uint32_t value)
 {
+    qemu_mutex_lock_iothread();
     env->regs[CR_IENABLE] = value;
     nios2_iic_update_cr_ienable(env->pic_state);
+    qemu_mutex_unlock_iothread();
 }
 
 void helper_cr_status_write(CPUNios2State *env, uint32_t value)
 {
+    qemu_mutex_lock_iothread();
     env->regs[CR_STATUS] = value;
     nios2_iic_update_cr_status(env->pic_state);
+    qemu_mutex_unlock_iothread();
 }
 #endif /* !CONFIG_USER_ONLY */
 

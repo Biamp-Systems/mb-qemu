@@ -209,6 +209,7 @@ struct tcp_hdr {
 #define ETH_P_IPV6                (0x86dd)
 #define ETH_P_VLAN                (0x8100)
 #define ETH_P_DVLAN               (0x88a8)
+#define ETH_P_NCSI                (0x88f8)
 #define ETH_P_UNKNOWN             (0xffff)
 #define VLAN_VID_MASK             0x0fff
 #define IP_HEADER_VERSION_4       (4)
@@ -331,12 +332,12 @@ eth_get_pkt_tci(const void *p)
     }
 }
 
-bool
+size_t
 eth_strip_vlan(const struct iovec *iov, int iovcnt, size_t iovoff,
                uint8_t *new_ehdr_buf,
                uint16_t *payload_offset, uint16_t *tci);
 
-bool
+size_t
 eth_strip_vlan_ex(const struct iovec *iov, int iovcnt, size_t iovoff,
                   uint16_t vet, uint8_t *new_ehdr_buf,
                   uint16_t *payload_offset, uint16_t *tci);

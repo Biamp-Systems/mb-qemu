@@ -34,7 +34,7 @@
 
 typedef struct AlteraIIC {
     SysBusDevice  parent_obj;
-    void         *cpu;
+    Nios2CPU     *cpu;
     qemu_irq      parent_irq;
     uint32_t      irqs;
 } AlteraIIC;
@@ -56,7 +56,7 @@ typedef struct AlteraIIC {
 
 static void update_irq(AlteraIIC *pv)
 {
-    CPUNios2State *env = &((Nios2CPU *)(pv->cpu))->env;
+    CPUNios2State *env = &pv->cpu->env;
 
     if ((env->regs[CR_STATUS] & CR_STATUS_PIE) == 0) {
         qemu_irq_lower(pv->parent_irq);
@@ -74,7 +74,7 @@ static void update_irq(AlteraIIC *pv)
  static void irq_handler(void *opaque, int irq, int level)
  {
     AlteraIIC *s = opaque;
-    CPUNios2State *env = &((Nios2CPU *)(s->cpu))->env;
+    CPUNios2State *env = &s->cpu->env;
 
     /* Keep track of IRQ lines states */
     s->irqs &= ~(1 << irq);
@@ -88,7 +88,7 @@ void nios2_iic_update_cr_ienable(DeviceState *d)
 {
     /* Modify the IPENDING register */
     AlteraIIC *s = ALTERA_IIC(d);
-    CPUNios2State *env = &((Nios2CPU *)(s->cpu))->env;
+    CPUNios2State *env = &s->cpu->env;
     env->regs[CR_IPENDING] = env->regs[CR_IENABLE] & s->irqs;
     update_irq(s);
 }
@@ -107,11 +107,11 @@ void nios2_iic_create(Nios2CPU *cpu)
     DeviceState *dev;
 
     dev = qdev_create(NULL, "altera,iic");
-    qdev_prop_set_ptr(dev, "cpu", cpu);
+    object_property_add_const_link(OBJECT(dev), "cpu", OBJECT(cpu), &error_abort);
     qdev_init_nofail(dev);
     cpu->env.pic_state = dev;
     qdev_connect_gpio_out_named(dev, "irq", 0,
-                                qdev_get_gpio_in(DEVICE(first_cpu), 0));
+                                qdev_get_gpio_in(DEVICE(cpu), 0));
 }
 
 static void altera_iic_init(Object *obj)
@@ -146,7 +146,6 @@ static int altera_iic_fdt_get_irq(FDTGenericIntc *obj, qemu_irq *irqs,
 };
 
 static Property altera_iic_properties[] = {
-    DEFINE_PROP_PTR("cpu", AlteraIIC, cpu),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -159,9 +158,12 @@ static void altera_iic_fdt_auto_parent(FDTGenericIntc *obj, Error **errp)
 static void altera_iic_realize(DeviceState *dev, Error **errp)
 {
     struct AlteraIIC *pv = ALTERA_IIC(dev);
+    Error *err = NULL;
 
+    pv->cpu = NIOS2_CPU(object_property_get_link(OBJECT(dev), "cpu", &err));
     if (!pv->cpu) {
-        error_setg(errp, "altera,iic: CPU not connected");
+        error_setg(errp, "altera,iic: CPU link not found: %s",
+                   error_get_pretty(err));
         return;
     }
 }
@@ -172,8 +174,8 @@ static void altera_iic_class_init(ObjectClass *klass, void *data)
     FDTGenericIntcClass *fgic = FDT_GENERIC_INTC_CLASS(klass);
 
     dc->props = altera_iic_properties;
-    /* Reason: pointer property "cpu" */
-    dc->cannot_instantiate_with_device_add_yet = true;
+    /* Reason: needs to be wired up, e.g. by nios2_10m50_ghrd_init() */
+    dc->user_creatable = false;
     dc->realize = altera_iic_realize;
     fgic->get_irq = altera_iic_fdt_get_irq;
     fgic->auto_parent = altera_iic_fdt_auto_parent;

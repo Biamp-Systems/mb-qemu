@@ -26,6 +26,18 @@ typedef enum {
 /* armv7m.c */
 DeviceState *armv7m_init(MemoryRegion *system_memory, int mem_size, int num_irq,
                       const char *kernel_filename, const char *cpu_model);
+/**
+ * armv7m_load_kernel:
+ * @cpu: CPU
+ * @kernel_filename: file to load
+ * @mem_size: mem_size: maximum image size to load
+ *
+ * Load the guest image for an ARMv7M system. This must be called by
+ * any ARMv7M board, either directly or via armv7m_init(). (This is
+ * necessary to ensure that the CPU resets correctly on system reset,
+ * as well as for kernel loading.)
+ */
+void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size);
 
 /*
  * struct used as a parameter of the arm_load_kernel machine init
@@ -43,6 +55,8 @@ struct arm_boot_info {
     const char *kernel_cmdline;
     const char *initrd_filename;
     const char *dtb_filename;
+    void *fdt;
+    int fdt_size;
     hwaddr loader_start;
     /* multicore boards that use the default secondary core boot functions
      * need to put the address of the secondary boot code, the boot reg,

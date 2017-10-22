@@ -13,6 +13,7 @@
  */
 
 #include "qapi-types.h"
+#include "sysemu.h"
 
 /* replay clock kinds */
 enum ReplayClockKind {
@@ -98,7 +99,7 @@ int64_t replay_read_clock(ReplayClockKind kind);
 /* Events */
 
 /*! Called when qemu shutdown is requested. */
-void replay_shutdown_request(void);
+void replay_shutdown_request(ShutdownCause cause);
 /*! Should be called at check points in the execution.
     These check points are skipped, if they were not met.
     Saves checkpoint in the SAVE mode and validates in the PLAY mode.
@@ -151,6 +152,13 @@ void replay_unregister_net(ReplayNetState *rns);
 /*! Called to write network packet to the replay log. */
 void replay_net_packet_event(ReplayNetState *rns, unsigned flags,
                              const struct iovec *iov, int iovcnt);
+
+/* Audio */
+
+/*! Saves/restores number of played samples of audio out operation. */
+void replay_audio_out(int *played);
+/*! Saves/restores recorded samples of audio in operation. */
+void replay_audio_in(int *recorded, void *samples, int *wpos, int size);
 
 /* VM state operations */
 

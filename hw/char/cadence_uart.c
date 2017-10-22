@@ -23,7 +23,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
+#include "chardev/char-serial.h"
 #include "qemu/timer.h"
 #include "qemu/log.h"
 #include "hw/char/cadence_uart.h"
@@ -278,7 +279,7 @@ static gboolean cadence_uart_xmit(GIOChannel *chan, GIOCondition cond,
     int ret;
 
     /* instant drain the fifo when there's no back-end */
-    if (!qemu_chr_fe_get_driver(&s->chr)) {
+    if (!qemu_chr_fe_backend_connected(&s->chr)) {
         s->tx_count = 0;
         return FALSE;
     }
@@ -462,7 +463,7 @@ static void cadence_uart_reset(DeviceState *dev)
 {
     CadenceUARTState *s = CADENCE_UART(dev);
 
-    s->r[R_CR] = 0x00000128;
+    s->r[R_CR] = UART_CR_RX_EN | UART_CR_TX_EN | UART_CR_STOPBRK;
     s->r[R_IMR] = 0;
     s->r[R_CISR] = 0;
     s->r[R_RTRIG] = 0x00000020;
@@ -484,7 +485,7 @@ static void cadence_uart_realize(DeviceState *dev, Error **errp)
                                           fifo_trigger_update, s);
 
     qemu_chr_fe_set_handlers(&s->chr, uart_can_receive, uart_receive,
-                             uart_event, s, NULL, true);
+                             uart_event, NULL, s, NULL, true);
 }
 
 static void cadence_uart_init(Object *obj)
@@ -547,7 +548,7 @@ static void cadence_uart_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_cadence_uart;
     dc->reset = cadence_uart_reset;
     dc->props = cadence_uart_properties;
-  }
+}
 
 static const TypeInfo cadence_uart_info = {
     .name          = TYPE_CADENCE_UART,

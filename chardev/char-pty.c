@@ -24,12 +24,12 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu-common.h"
-#include "sysemu/char.h"
+#include "chardev/char.h"
 #include "io/channel-file.h"
 #include "qemu/sockets.h"
 #include "qemu/error-report.h"
 
-#include "char-io.h"
+#include "chardev/char-io.h"
 
 #if defined(__linux__) || defined(__sun__) || defined(__FreeBSD__)      \
     || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) \
@@ -185,7 +185,7 @@ static gboolean qemu_chr_be_generic_open_func(gpointer opaque)
     PtyChardev *s = PTY_CHARDEV(opaque);
 
     s->open_tag = 0;
-    qemu_chr_be_generic_open(chr);
+    qemu_chr_be_event(chr, CHR_EVENT_OPENED);
     return FALSE;
 }
 
@@ -215,8 +215,8 @@ static void pty_chr_state(Chardev *chr, int connected)
             s->connected = 1;
             s->open_tag = g_idle_add(qemu_chr_be_generic_open_func, chr);
         }
-        if (!chr->fd_in_tag) {
-            chr->fd_in_tag = io_add_watch_poll(chr, s->ioc,
+        if (!chr->gsource) {
+            chr->gsource = io_add_watch_poll(chr, s->ioc,
                                                pty_chr_read_poll,
                                                pty_chr_read,
                                                chr, NULL);

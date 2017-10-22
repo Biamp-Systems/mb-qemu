@@ -297,6 +297,7 @@ struct EHCIState {
      */
     QEMUTimer *frame_timer;
     QEMUBH *async_bh;
+    bool working;
     uint32_t astate;         /* Current state in asynchronous schedule */
     uint32_t pstate;         /* Current state in periodic schedule     */
     USBPort ports[NB_PORTS];
@@ -344,6 +345,7 @@ typedef struct EHCIPCIState {
 #define TYPE_EXYNOS4210_EHCI "exynos4210-ehci-usb"
 #define TYPE_TEGRA2_EHCI "tegra2-ehci-usb"
 #define TYPE_FUSBH200_EHCI "fusbh200-ehci-usb"
+#define TYPE_XLNX_PS7_USB "xlnx,ps7-usb"
 
 #define SYS_BUS_EHCI(obj) \
     OBJECT_CHECK(EHCISysBusState, (obj), TYPE_SYS_BUS_EHCI)
@@ -381,5 +383,34 @@ typedef struct FUSBH200EHCIState {
 
     MemoryRegion mem_vendor;
 } FUSBH200EHCIState;
+
+#define XLNX_PS7_USB(obj) \
+    OBJECT_CHECK(PS7USBState, (obj), TYPE_XLNX_PS7_USB)
+
+#define PS7USB_DEVREG_OFFSET 0x120
+#define PS7USB_DEVREG_SIZE   0x8
+#define PS7USB_HWREG_OFFSET  0x0
+#define PS7USB_HWREG_SIZE    0x18
+#define PS7USB_ULPIVP_OFFSET 0x170
+#define PS7USB_ULPIVP_SIZE   0x4
+
+#define XLNX_ID_DEFVAL        0xE441FA05
+#define XLNX_HWGENERAL_DEFVAL 0x83
+#define XLNX_HWHOST_DEFVAL    0x10020001
+#define XLNX_HWTXBUF_DEFVAL   0x80060A10
+#define XLNX_HWRXBUF_DEFVAL   0xA10
+
+#define ULPIREG_RWBITS_MASK   0xE0FF00FF
+
+typedef struct PS7USBState {
+    EHCISysBusState parent_obj;
+
+    uint32_t ulpi_viewport;
+    uint8_t ulpireg[0x19];
+
+    MemoryRegion mem_devreg;
+    MemoryRegion mem_hwreg;
+    MemoryRegion mem_ulpi;
+} PS7USBState;
 
 #endif

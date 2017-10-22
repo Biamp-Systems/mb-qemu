@@ -34,7 +34,7 @@ struct VirtQueue;
 static inline hwaddr vring_align(hwaddr addr,
                                              unsigned long align)
 {
-    return (addr + align - 1) & ~(align - 1);
+    return QEMU_ALIGN_UP(addr, align);
 }
 
 typedef struct VirtQueue VirtQueue;
@@ -79,6 +79,7 @@ struct VirtIODevice
     uint16_t queue_sel;
     uint64_t guest_features;
     uint64_t host_features;
+    uint64_t backend_features;
     size_t config_len;
     void *config;
     uint16_t config_vector;

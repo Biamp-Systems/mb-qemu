@@ -54,7 +54,7 @@
 #include "qmp-commands.h"
 #include "x_keymap.h"
 #include "keymaps.h"
-#include "sysemu/char.h"
+#include "chardev/char.h"
 #include "qom/object.h"
 
 #define MAX_VCS 10
@@ -669,7 +669,7 @@ static const DisplayChangeListenerOps dcl_gl_area_ops = {
     .dpy_gl_ctx_destroy      = gd_gl_area_destroy_context,
     .dpy_gl_ctx_make_current = gd_gl_area_make_current,
     .dpy_gl_ctx_get_current  = gd_gl_area_get_current_context,
-    .dpy_gl_scanout          = gd_gl_area_scanout,
+    .dpy_gl_scanout_texture  = gd_gl_area_scanout_texture,
     .dpy_gl_update           = gd_gl_area_scanout_flush,
 };
 
@@ -688,7 +688,8 @@ static const DisplayChangeListenerOps dcl_egl_ops = {
     .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
     .dpy_gl_ctx_make_current = gd_egl_make_current,
     .dpy_gl_ctx_get_current  = qemu_egl_get_current_context,
-    .dpy_gl_scanout          = gd_egl_scanout,
+    .dpy_gl_scanout_disable  = gd_egl_scanout_disable,
+    .dpy_gl_scanout_texture  = gd_egl_scanout_texture,
     .dpy_gl_update           = gd_egl_scanout_flush,
 };
 
@@ -911,9 +912,9 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
             return TRUE;
         }
         qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_X, x,
-                             surface_width(vc->gfx.ds));
+                             0, surface_width(vc->gfx.ds));
         qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_Y, y,
-                             surface_height(vc->gfx.ds));
+                             0, surface_height(vc->gfx.ds));
         qemu_input_event_sync();
     } else if (s->last_set && s->ptr_owner == vc) {
         qemu_input_queue_rel(vc->gfx.dcl.con, INPUT_AXIS_X, x - s->last_x);
@@ -1867,7 +1868,7 @@ static GSList *gd_vc_vte_init(GtkDisplayState *s, VirtualConsole *vc,
     gtk_notebook_append_page(GTK_NOTEBOOK(s->notebook), vc->tab_item,
                              gtk_label_new(vc->label));
 
-    qemu_chr_be_generic_open(vc->vte.chr);
+    qemu_chr_be_event(vc->vte.chr, CHR_EVENT_OPENED);
 
     return group;
 }
@@ -2200,11 +2201,12 @@ static void gd_set_keycode_type(GtkDisplayState *s)
     GdkDisplay *display = gtk_widget_get_display(s->window);
     if (GDK_IS_X11_DISPLAY(display)) {
         Display *x11_display = gdk_x11_display_get_xdisplay(display);
-        XkbDescPtr desc = XkbGetKeyboard(x11_display, XkbGBN_AllComponentsMask,
-                                         XkbUseCoreKbd);
+        XkbDescPtr desc = XkbGetMap(x11_display, XkbGBN_AllComponentsMask,
+                                    XkbUseCoreKbd);
         char *keycodes = NULL;
 
-        if (desc && desc->names) {
+        if (desc &&
+            (XkbGetNames(x11_display, XkbKeycodesNameMask, desc) == Success)) {
             keycodes = XGetAtomName(x11_display, desc->names->keycodes);
         }
         if (keycodes == NULL) {

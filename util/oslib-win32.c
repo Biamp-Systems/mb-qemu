@@ -414,7 +414,7 @@ static int poll_rest(gboolean poll_msgs, HANDLE *handles, gint nhandles,
         /* If we have a timeout, or no handles to poll, be satisfied
          * with just noticing we have messages waiting.
          */
-        if (timeout != 0 || nhandles == 0) {
+        if (timeout != 0) {
             return 1;
         }
 
@@ -432,19 +432,30 @@ static int poll_rest(gboolean poll_msgs, HANDLE *handles, gint nhandles,
             }
         }
 
-        /* If no timeout and polling several handles, recurse to poll
-         * the rest of them.
+        /* We only found one and we are waiting on more then one. Let's try
+         * again.
          */
-        if (timeout == 0 && nhandles > 1) {
+        if (nhandles > 1) {
             /* Remove the handle that fired */
             int i;
-            if (ready < nhandles - 1) {
-                for (i = ready - WAIT_OBJECT_0 + 1; i < nhandles; i++) {
-                    handles[i-1] = handles[i];
-                }
+            for (i = ready - WAIT_OBJECT_0 + 1; i < nhandles; i++) {
+                handles[i-1] = handles[i];
             }
             nhandles--;
-            recursed_result = poll_rest(FALSE, handles, nhandles, fds, nfds, 0);
+
+            /* If we just had a very small timeout let's increase it when we
+             * recurse to ensure we don't just busy wait. This ensures we let
+             * the Windows threads block at least a little. If we previously
+             * had some wait let's set it to zero to avoid blocking for too
+             * long.
+             */
+            if (timeout < 10) {
+                timeout = timeout + 1;
+            } else {
+                timeout = 0;
+            }
+            recursed_result = poll_rest(FALSE, handles, nhandles, fds,
+                                        nfds, timeout);
             return (recursed_result == -1) ? -1 : 1 + recursed_result;
         }
         return 1;
@@ -541,7 +552,8 @@ int getpagesize(void)
     return system_info.dwPageSize;
 }
 
-void os_mem_prealloc(int fd, char *area, size_t memory, Error **errp)
+void os_mem_prealloc(int fd, char *area, size_t memory, int smp_cpus,
+                     Error **errp)
 {
     int i;
     size_t pagesize = getpagesize();
@@ -550,30 +562,6 @@ void os_mem_prealloc(int fd, char *area, size_t memory, Error **errp)
     for (i = 0; i < memory / pagesize; i++) {
         memset(area + pagesize * i, 0, 1);
     }
-}
-
-
-/* XXX: put correct support for win32 */
-int qemu_read_password(char *buf, int buf_size)
-{
-    int c, i;
-
-    printf("Password: ");
-    fflush(stdout);
-    i = 0;
-    for (;;) {
-        c = getchar();
-        if (c < 0) {
-            buf[i] = '\0';
-            return -1;
-        } else if (c == '\n') {
-            break;
-        } else if (i < (buf_size - 1)) {
-            buf[i++] = c;
-        }
-    }
-    buf[i] = '\0';
-    return 0;
 }
 
 

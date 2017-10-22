@@ -10,6 +10,10 @@
 # Emitted when the virtual machine has shut down, indicating that qemu is
 # about to exit.
 #
+# @guest: If true, the shutdown was triggered by a guest request (such as
+# a guest-initiated ACPI shutdown request or other hardware-specific action)
+# rather than a host request (such as sending qemu a SIGINT). (since 2.10)
+#
 # Note: If the command-line option "-no-shutdown" has been specified, qemu will
 # not exit, and a STOP event will eventually follow the SHUTDOWN event
 #
@@ -17,11 +21,11 @@
 #
 # Example:
 #
-# <- { "event": "SHUTDOWN",
+# <- { "event": "SHUTDOWN", "data": { "guest": true },
 #      "timestamp": { "seconds": 1267040730, "microseconds": 682951 } }
 #
 ##
-{ 'event': 'SHUTDOWN' }
+{ 'event': 'SHUTDOWN', 'data': { 'guest': 'bool' } }
 
 ##
 # @POWERDOWN:
@@ -44,15 +48,20 @@
 #
 # Emitted when the virtual machine is reset
 #
+# @guest: If true, the reset was triggered by a guest request (such as
+# a guest-initiated ACPI reboot request or other hardware-specific action)
+# rather than a host request (such as the QMP command system_reset).
+# (since 2.10)
+#
 # Since: 0.12.0
 #
 # Example:
 #
-# <- { "event": "RESET",
+# <- { "event": "RESET", "data": { "guest": false },
 #      "timestamp": { "seconds": 1267041653, "microseconds": 9518 } }
 #
 ##
-{ 'event': 'RESET' }
+{ 'event': 'RESET', 'data': { 'guest': 'bool' } }
 
 ##
 # @STOP:
@@ -186,7 +195,7 @@
 # At this point, it's safe to reuse the specified device ID. Device removal can
 # be initiated by the guest or by HMP/QMP commands.
 #
-# @device: #optional device name
+# @device: device name
 #
 # @path: device path
 #
@@ -209,7 +218,7 @@
 # Emitted once until the 'query-rx-filter' command is executed, the first event
 # will always be emitted
 #
-# @name: #optional net client name
+# @name: net client name
 #
 # @path: device path
 #
@@ -488,9 +497,9 @@
 #
 # @action: action that has been taken, currently always "pause"
 #
-# @info: optional information about a panic
+# @info: information about a panic (since 2.9)
 #
-# Since: 1.5 (@info since 2.9)
+# Since: 1.5
 #
 # Example:
 #
@@ -533,7 +542,7 @@
 #
 # @type: quorum operation type (Since 2.6)
 #
-# @error: #optional error message. Only present on failure. This field
+# @error: error message. Only present on failure. This field
 #         contains a human-readable error message. There are no semantics other
 #         than that the block layer reported an error and clients should not
 #         try to interpret the error string.
@@ -620,7 +629,7 @@
 #
 # @result: DumpQueryResult type described in qapi-schema.json.
 #
-# @error: #optional human-readable error string that provides
+# @error: human-readable error string that provides
 #         hint on why dump failed. Only presents on failure. The
 #         user should not try to interpret the error string.
 #

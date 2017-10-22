@@ -808,6 +808,10 @@ GEN_VSX_HELPER_2(xscmpoqp, 0x04, 0x04, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xscmpuqp, 0x04, 0x14, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xsmaxdp, 0x00, 0x14, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xsmindp, 0x00, 0x15, 0, PPC2_VSX)
+GEN_VSX_HELPER_2(xsmaxcdp, 0x00, 0x10, 0, PPC2_ISA300)
+GEN_VSX_HELPER_2(xsmincdp, 0x00, 0x11, 0, PPC2_ISA300)
+GEN_VSX_HELPER_2(xsmaxjdp, 0x00, 0x12, 0, PPC2_ISA300)
+GEN_VSX_HELPER_2(xsminjdp, 0x00, 0x12, 0, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvdphp, 0x16, 0x15, 0x11, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvdpsp, 0x12, 0x10, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xscvdpqp, 0x04, 0x1A, 0x16, PPC2_ISA300)
@@ -815,6 +819,8 @@ GEN_VSX_HELPER_XT_XB_ENV(xscvdpspn, 0x16, 0x10, 0, PPC2_VSX207)
 GEN_VSX_HELPER_2(xscvqpdp, 0x04, 0x1A, 0x14, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvqpsdz, 0x04, 0x1A, 0x19, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvqpswz, 0x04, 0x1A, 0x09, PPC2_ISA300)
+GEN_VSX_HELPER_2(xscvqpudz, 0x04, 0x1A, 0x11, PPC2_ISA300)
+GEN_VSX_HELPER_2(xscvqpuwz, 0x04, 0x1A, 0x01, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvhpdp, 0x16, 0x15, 0x10, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvsdqp, 0x04, 0x1A, 0x0A, PPC2_ISA300)
 GEN_VSX_HELPER_2(xscvspdp, 0x12, 0x14, 0, PPC2_VSX)
@@ -832,6 +838,11 @@ GEN_VSX_HELPER_2(xsrdpim, 0x12, 0x07, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xsrdpip, 0x12, 0x06, 0, PPC2_VSX)
 GEN_VSX_HELPER_2(xsrdpiz, 0x12, 0x05, 0, PPC2_VSX)
 GEN_VSX_HELPER_XT_XB_ENV(xsrsp, 0x12, 0x11, 0, PPC2_VSX207)
+
+GEN_VSX_HELPER_2(xsrqpi, 0x05, 0x00, 0, PPC2_ISA300)
+GEN_VSX_HELPER_2(xsrqpxp, 0x05, 0x01, 0, PPC2_ISA300)
+GEN_VSX_HELPER_2(xssqrtqp, 0x04, 0x19, 0x1B, PPC2_ISA300)
+GEN_VSX_HELPER_2(xssubqp, 0x04, 0x10, 0, PPC2_ISA300)
 
 GEN_VSX_HELPER_2(xsaddsp, 0x00, 0x00, 0, PPC2_VSX207)
 GEN_VSX_HELPER_2(xssubsp, 0x00, 0x01, 0, PPC2_VSX207)
@@ -1237,8 +1248,7 @@ static void gen_xsxexpdp(DisasContext *ctx)
         gen_exception(ctx, POWERPC_EXCP_VSXU);
         return;
     }
-    tcg_gen_shri_i64(rt, cpu_vsrh(xB(ctx->opcode)), 52);
-    tcg_gen_andi_i64(rt, rt, 0x7FF);
+    tcg_gen_extract_i64(rt, cpu_vsrh(xB(ctx->opcode)), 52, 11);
 }
 
 static void gen_xsxexpqp(DisasContext *ctx)
@@ -1251,8 +1261,7 @@ static void gen_xsxexpqp(DisasContext *ctx)
         gen_exception(ctx, POWERPC_EXCP_VSXU);
         return;
     }
-    tcg_gen_shri_i64(xth, xbh, 48);
-    tcg_gen_andi_i64(xth, xth, 0x7FFF);
+    tcg_gen_extract_i64(xth, xbh, 48, 15);
     tcg_gen_movi_i64(xtl, 0);
 }
 
@@ -1312,8 +1321,7 @@ static void gen_xsxsigdp(DisasContext *ctx)
     zr = tcg_const_i64(0);
     nan = tcg_const_i64(2047);
 
-    tcg_gen_shri_i64(exp, cpu_vsrh(xB(ctx->opcode)), 52);
-    tcg_gen_andi_i64(exp, exp, 0x7FF);
+    tcg_gen_extract_i64(exp, cpu_vsrh(xB(ctx->opcode)), 52, 11);
     tcg_gen_movi_i64(t0, 0x0010000000000000);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, zr, zr, t0);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, nan, zr, t0);
@@ -1341,8 +1349,7 @@ static void gen_xsxsigqp(DisasContext *ctx)
     zr = tcg_const_i64(0);
     nan = tcg_const_i64(32767);
 
-    tcg_gen_shri_i64(exp, cpu_vsrh(rB(ctx->opcode) + 32), 48);
-    tcg_gen_andi_i64(exp, exp, 0x7FFF);
+    tcg_gen_extract_i64(exp, cpu_vsrh(rB(ctx->opcode) + 32), 48, 15);
     tcg_gen_movi_i64(t0, 0x0001000000000000);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, zr, zr, t0);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, nan, zr, t0);
@@ -1437,10 +1444,8 @@ static void gen_xvxexpdp(DisasContext *ctx)
         gen_exception(ctx, POWERPC_EXCP_VSXU);
         return;
     }
-    tcg_gen_shri_i64(xth, xbh, 52);
-    tcg_gen_andi_i64(xth, xth, 0x7FF);
-    tcg_gen_shri_i64(xtl, xbl, 52);
-    tcg_gen_andi_i64(xtl, xtl, 0x7FF);
+    tcg_gen_extract_i64(xth, xbh, 52, 11);
+    tcg_gen_extract_i64(xtl, xbl, 52, 11);
 }
 
 GEN_VSX_HELPER_2(xvxsigsp, 0x00, 0x04, 0, PPC2_ISA300)
@@ -1463,16 +1468,14 @@ static void gen_xvxsigdp(DisasContext *ctx)
     zr = tcg_const_i64(0);
     nan = tcg_const_i64(2047);
 
-    tcg_gen_shri_i64(exp, xbh, 52);
-    tcg_gen_andi_i64(exp, exp, 0x7FF);
+    tcg_gen_extract_i64(exp, xbh, 52, 11);
     tcg_gen_movi_i64(t0, 0x0010000000000000);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, zr, zr, t0);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, nan, zr, t0);
     tcg_gen_andi_i64(xth, xbh, 0x000FFFFFFFFFFFFF);
     tcg_gen_or_i64(xth, xth, t0);
 
-    tcg_gen_shri_i64(exp, xbl, 52);
-    tcg_gen_andi_i64(exp, exp, 0x7FF);
+    tcg_gen_extract_i64(exp, xbl, 52, 11);
     tcg_gen_movi_i64(t0, 0x0010000000000000);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, zr, zr, t0);
     tcg_gen_movcond_i64(TCG_COND_EQ, t0, exp, nan, zr, t0);

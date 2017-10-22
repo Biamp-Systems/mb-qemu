@@ -1,9 +1,10 @@
 #ifndef FDT_GENERIC_UTIL_H
 #define FDT_GENERIC_UTIL_H
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "fdt_generic.h"
+#include "exec/memory.h"
+#include "qom/object.h"
 
 /* create a fdt_generic machine. the top level cpu irqs are required for
  * systems instantiating interrupt devices. The client is responsible for
@@ -11,13 +12,6 @@
  */
 
 FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq);
-
-/* fdt init a simple bus. Search the bus for child nodes and instantiate or
- * invalidate devices as appropriate. Conformant to FDTInitFn prototype, i.e.
- * a bus may fdt_register_compatibilty this as its instantiator.
- */
-
-int simple_bus_fdt_init(char *node_path, FDTMachineInfo *fdti, void *priv);
 
 /* get an irq for a device. The interrupt parent of a device is idenitified
  * and the specified irq (by the interrupts device-tree property) is retrieved

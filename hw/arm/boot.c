@@ -23,6 +23,8 @@
 #include "qemu/config-file.h"
 #include "exec/address-spaces.h"
 
+#include <libfdt.h>
+
 /* Kernel boot protocol is specified in the kernel docs
  * Documentation/arm/Booting and Documentation/arm64/booting.txt
  * They have different preferred image load offsets from system RAM base.
@@ -30,6 +32,9 @@
 #define KERNEL_ARGS_ADDR 0x100
 #define KERNEL_LOAD_ADDR 0x00010000
 #define KERNEL64_LOAD_ADDR 0x00080000
+
+#define ARM64_TEXT_OFFSET_OFFSET    8
+#define ARM64_MAGIC_OFFSET          56
 
 typedef enum {
     FIXUP_NONE = 0,     /* do nothing */
@@ -496,7 +501,8 @@ static int load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
             qemu_fdt_add_subnode(fdt, "/memory");
         }
 
-        if (!qemu_fdt_getprop(fdt, "/memory", "device_type", NULL, &err)) {
+        if (!qemu_fdt_getprop(fdt, "/memory", "device_type", NULL, false,
+                              &err)) {
             qemu_fdt_setprop_string(fdt, "/memory", "device_type", "memory");
         }
 
@@ -770,6 +776,49 @@ static uint64_t arm_load_elf(struct arm_boot_info *info, uint64_t *pentry,
     return ret;
 }
 
+static uint64_t load_aarch64_image(const char *filename, hwaddr mem_base,
+                                   hwaddr *entry)
+{
+    hwaddr kernel_load_offset = KERNEL64_LOAD_ADDR;
+    uint8_t *buffer;
+    int size;
+
+    /* On aarch64, it's the bootloader's job to uncompress the kernel. */
+    size = load_image_gzipped_buffer(filename, LOAD_IMAGE_MAX_GUNZIP_BYTES,
+                                     &buffer);
+
+    if (size < 0) {
+        gsize len;
+
+        /* Load as raw file otherwise */
+        if (!g_file_get_contents(filename, (char **)&buffer, &len, NULL)) {
+            return -1;
+        }
+        size = len;
+    }
+
+    /* check the arm64 magic header value -- very old kernels may not have it */
+    if (memcmp(buffer + ARM64_MAGIC_OFFSET, "ARM\x64", 4) == 0) {
+        uint64_t hdrvals[2];
+
+        /* The arm64 Image header has text_offset and image_size fields at 8 and
+         * 16 bytes into the Image header, respectively. The text_offset field
+         * is only valid if the image_size is non-zero.
+         */
+        memcpy(&hdrvals, buffer + ARM64_TEXT_OFFSET_OFFSET, sizeof(hdrvals));
+        if (hdrvals[1] != 0) {
+            kernel_load_offset = le64_to_cpu(hdrvals[0]);
+        }
+    }
+
+    *entry = mem_base + kernel_load_offset;
+    rom_add_blob_fixed(filename, buffer, size, *entry);
+
+    g_free(buffer);
+
+    return size;
+}
+
 static void arm_load_kernel_notify(Notifier *notifier, void *data)
 {
     CPUState *cs;
@@ -778,7 +827,7 @@ static void arm_load_kernel_notify(Notifier *notifier, void *data)
     int is_linux = 0;
     uint64_t elf_entry, elf_low_addr, elf_high_addr;
     int elf_machine;
-    hwaddr entry, kernel_load_offset;
+    hwaddr entry;
     static const ARMInsnFixup *primary_loader;
     ArmLoadKernelNotifier *n = DO_UPCAST(ArmLoadKernelNotifier,
                                          notifier, notifier);
@@ -843,16 +892,18 @@ static void arm_load_kernel_notify(Notifier *notifier, void *data)
 
     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
         primary_loader = bootloader_aarch64;
-        kernel_load_offset = KERNEL64_LOAD_ADDR;
         elf_machine = EM_AARCH64;
     } else {
         primary_loader = bootloader;
         if (!info->write_board_setup) {
             primary_loader += BOOTLOADER_NO_BOARD_SETUP_OFFSET;
         }
-        kernel_load_offset = KERNEL_LOAD_ADDR;
         elf_machine = EM_ARM;
     }
+
+    info->dtb_filename = qemu_opt_get(qemu_get_machine_opts(), "dtb");
+    is_linux = object_property_get_bool(OBJECT(qdev_get_machine()),
+                                        "linux", NULL);
 
     if (!info->secondary_cpu_reset_hook) {
         info->secondary_cpu_reset_hook = default_reset_secondary;
@@ -878,8 +929,11 @@ static void arm_load_kernel_notify(Notifier *notifier, void *data)
         MIN(info->ram_size / 2, 128 * 1024 * 1024);
 
     /* Assume that raw images are linux kernels, and ELF images are not.  */
+    /* Xilinx: Don't use a specified ELF machine, instead let the loader read
+     * it from the ELF file
+     */
     kernel_size = arm_load_elf(info, &elf_entry, &elf_low_addr,
-                               &elf_high_addr, elf_machine);
+                               &elf_high_addr, 0);
     if (kernel_size > 0 && have_dtb(info)) {
         /* If there is still some room left at the base of RAM, try and put
          * the DTB there like we do for images loaded with -bios or -pflash.
@@ -902,17 +956,15 @@ static void arm_load_kernel_notify(Notifier *notifier, void *data)
         kernel_size = load_uimage(info->kernel_filename, &entry, NULL,
                                   &is_linux, NULL, NULL);
     }
-    /* On aarch64, it's the bootloader's job to uncompress the kernel. */
     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64) && kernel_size < 0) {
-        entry = info->loader_start + kernel_load_offset;
-        kernel_size = load_image_gzipped(info->kernel_filename, entry,
-                                         info->ram_size - kernel_load_offset);
+        kernel_size = load_aarch64_image(info->kernel_filename,
+                                         info->loader_start, &entry);
         is_linux = 1;
-    }
-    if (kernel_size < 0) {
-        entry = info->loader_start + kernel_load_offset;
+    } else if (kernel_size < 0) {
+        /* 32-bit ARM */
+        entry = info->loader_start + KERNEL_LOAD_ADDR;
         kernel_size = load_image_targphys(info->kernel_filename, entry,
-                                          info->ram_size - kernel_load_offset);
+                                          info->ram_size - KERNEL_LOAD_ADDR);
         is_linux = 1;
     }
     if (kernel_size < 0) {
@@ -947,6 +999,27 @@ static void arm_load_kernel_notify(Notifier *notifier, void *data)
 
         fixupcontext[FIXUP_BOARDID] = info->board_id;
         fixupcontext[FIXUP_BOARD_SETUP] = info->board_setup_addr;
+
+        if (info->fdt && fdt_path_offset(info->fdt, "/psci") > 0) {
+            /* There is a PSCI node in the DTS and the image being loaded is a
+             * Linux image. Therefore tell QEMU to handle the PSCI calls as
+             * ATF is not loaded.
+             */
+            char *method = NULL;
+
+            method = qemu_fdt_getprop_string(info->fdt, "/psci", "method",
+                                             0, false, NULL);
+
+            for (cs = CPU(cpu); cs; cs = CPU_NEXT(cs)) {
+                if (!strcmp(method, "smc")) {
+                    cpu->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
+                } else if (!strcmp(method, "hvc")) {
+                    cpu->psci_conduit = QEMU_PSCI_CONDUIT_HVC;
+                }
+            }
+
+            g_free(method);
+        }
 
         /* for device tree boot, we pass the DTB directly in r2. Otherwise
          * we point to the kernel args.

@@ -26,6 +26,8 @@
 #include "qemu/main-loop.h"
 #include "qom/cpu.h"
 
+#include "hw/fdt_generic_devices.h"
+
 #define PTIMER_POLICY                       \
     (PTIMER_POLICY_WRAP_AFTER_ONE_PERIOD |  \
      PTIMER_POLICY_CONTINUOUS_TRIGGER    |  \
@@ -238,6 +240,9 @@ static void arm_mptimer_realize(DeviceState *dev, Error **errp)
     ARMMPTimerState *s = ARM_MPTIMER(dev);
     int i;
 
+    if (!s->num_cpu) {
+        s->num_cpu = fdt_generic_num_cpus;
+    }
     if (s->num_cpu < 1 || s->num_cpu > ARM_MPTIMER_MAX_CPUS) {
         error_setg(errp, "num-cpu must be between 1 and %d",
                    ARM_MPTIMER_MAX_CPUS);

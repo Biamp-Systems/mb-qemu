@@ -151,6 +151,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr,
         DATA_TYPE res1, res2;
         unsigned shift;
     do_unaligned_access:
+
         addr1 = addr & ~(DATA_SIZE - 1);
         addr2 = addr1 + DATA_SIZE;
         res1 = helper_le_ld_name(env, addr1, oi, retaddr);

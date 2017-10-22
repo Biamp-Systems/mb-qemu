@@ -55,6 +55,18 @@ int arm_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
     case 25:
         /* CPSR */
         return gdb_get_reg32(mem_buf, cpsr_read(env));
+    case 26:
+        return gdb_get_reg32(mem_buf, env->cp15.c0_cpuid);
+    case 27:
+        return gdb_get_reg32(mem_buf, env->cp15.c2_data);
+    case 28:
+        return gdb_get_reg32(mem_buf, env->cp15.c2_insn);
+    case 29:
+        return gdb_get_reg32(mem_buf, env->cp15.esr_el[1]);
+    case 30:
+        return gdb_get_reg32(mem_buf, mpidr_read_val(env));
+    case 31:
+        return gdb_get_reg32(mem_buf, env->elr_el[1]);
     }
     /* Unknown register.  */
     return 0;
@@ -96,6 +108,24 @@ int arm_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     case 25:
         /* CPSR */
         cpsr_write(env, tmp, 0xffffffff, CPSRWriteByGDBStub);
+        return 4;
+    case 26:
+        env->cp15.c0_cpuid = tmp;
+        return 4;
+    case 27:
+        env->cp15.c2_data = tmp;
+        return 4;
+    case 28:
+        env->cp15.c2_insn = tmp;
+        return 4;
+    case 29:
+        env->cp15.esr_el[1] = tmp;
+        return 4;
+    case 30:
+        /* Writing to the MPIDR is not supported */
+        return 0;
+    case 31:
+        env->elr_el[1] = tmp;
         return 4;
     }
     /* Unknown register.  */

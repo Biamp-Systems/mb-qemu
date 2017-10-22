@@ -18,11 +18,13 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/main-loop.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "internals.h"
 #include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
+#include "sysemu/cpus.h"
 
 #define SIGNBIT (uint32_t)0x80000000
 #define SIGNBIT64 ((uint64_t)1 << 63)
@@ -77,6 +79,8 @@ uint32_t HELPER(neon_tbl)(CPUARMState *env, uint32_t ireg, uint32_t def,
 
 #if !defined(CONFIG_USER_ONLY)
 
+#include "hw/remote-port.h"
+
 static inline uint32_t merge_syn_data_abort(uint32_t template_syn,
                                             unsigned int target_el,
                                             bool same_el,
@@ -129,7 +133,7 @@ void tlb_fill(CPUState *cs, target_ulong addr, MMUAccessType access_type,
     if (unlikely(ret)) {
         ARMCPU *cpu = ARM_CPU(cs);
         CPUARMState *env = &cpu->env;
-        uint32_t syn, exc;
+        uint32_t syn, exc, fsc;
         unsigned int target_el;
         bool same_el;
 
@@ -144,19 +148,32 @@ void tlb_fill(CPUState *cs, target_ulong addr, MMUAccessType access_type,
             env->cp15.hpfar_el2 = extract64(fi.s2addr, 12, 47) << 4;
         }
         same_el = arm_current_el(env) == target_el;
-        /* AArch64 syndrome does not have an LPAE bit */
-        syn = fsr & ~(1 << 9);
+
+        if (fsr & (1 << 9)) {
+            /* LPAE format fault status register : bottom 6 bits are
+             * status code in the same form as needed for syndrome
+             */
+            fsc = extract32(fsr, 0, 6);
+        } else {
+            /* Short format FSR : this fault will never actually be reported
+             * to an EL that uses a syndrome register. Check that here,
+             * and use a (currently) reserved FSR code in case the constructed
+             * syndrome does leak into the guest somehow.
+             */
+            assert(target_el != 2 && !arm_el_is_aa64(env, target_el));
+            fsc = 0x3f;
+        }
 
         /* For insn and data aborts we assume there is no instruction syndrome
          * information; this is always true for exceptions reported to EL1.
          */
         if (access_type == MMU_INST_FETCH) {
-            syn = syn_insn_abort(same_el, 0, fi.s1ptw, syn);
+            syn = syn_insn_abort(same_el, 0, fi.s1ptw, fsc);
             exc = EXCP_PREFETCH_ABORT;
         } else {
             syn = merge_syn_data_abort(env->exception.syndrome, target_el,
                                        same_el, fi.s1ptw,
-                                       access_type == MMU_DATA_STORE, syn);
+                                       access_type == MMU_DATA_STORE, fsc);
             if (access_type == MMU_DATA_STORE
                 && arm_feature(env, ARM_FEATURE_V6)) {
                 fsr |= (1 << 11);
@@ -180,6 +197,7 @@ void arm_cpu_do_unaligned_access(CPUState *cs, vaddr vaddr,
     int target_el;
     bool same_el;
     uint32_t syn;
+    ARMMMUIdx arm_mmu_idx = core_to_arm_mmu_idx(env, mmu_idx);
 
     if (retaddr) {
         /* now we have a real cpu fault */
@@ -194,7 +212,7 @@ void arm_cpu_do_unaligned_access(CPUState *cs, vaddr vaddr,
     /* the DFSR for an alignment fault depends on whether we're using
      * the LPAE long descriptor format, or the short descriptor format
      */
-    if (arm_s1_regime_using_lpae_format(env, cpu_mmu_index(env, false))) {
+    if (arm_s1_regime_using_lpae_format(env, arm_mmu_idx)) {
         env->exception.fsr = (1 << 9) | 0x21;
     } else {
         env->exception.fsr = 0x1;
@@ -399,12 +417,12 @@ static inline int check_wfx_trap(CPUARMState *env, bool is_wfe)
 void HELPER(wfi)(CPUARMState *env)
 {
     CPUState *cs = CPU(arm_env_get_cpu(env));
+    ARMCPU *cpu = arm_env_get_cpu(env);
     int target_el = check_wfx_trap(env, false);
 
     if (cpu_has_work(cs)) {
-        /* Don't bother to go into our "low power state" if
-         * we would just wake up immediately.
-         */
+        cs->exception_index = -1;
+        cpu_loop_exit(cs);
         return;
     }
 
@@ -413,27 +431,74 @@ void HELPER(wfi)(CPUARMState *env)
         raise_exception(env, EXCP_UDEF, syn_wfx(1, 0xe, 0), target_el);
     }
 
-    cs->exception_index = EXCP_HLT;
-    cs->halted = 1;
+    if (use_icount) {
+        cs->exception_index = EXCP_YIELD;
+    } else {
+        cs->halted = 1;
+        cs->exception_index = EXCP_HLT;
+    }
+
+    cpu->is_in_wfi = true;
+    qemu_set_irq(cpu->wfi, 1);
+
     cpu_loop_exit(cs);
 }
 
 void HELPER(wfe)(CPUARMState *env)
 {
-    /* This is a hint instruction that is semantically different
-     * from YIELD even though we currently implement it identically.
-     * Don't actually halt the CPU, just yield back to top
-     * level loop. This is not going into a "low power state"
-     * (ie halting until some event occurs), so we never take
-     * a configurable trap to a different exception level.
-     */
-    HELPER(yield)(env);
+    ARMCPU *ac = ARM_CPU(arm_env_get_cpu(env));
+    CPUState *cs = CPU(ac);
+
+    g_assert(!parallel_cpus);
+
+    switch (ac->pe) {
+    case  1:
+        ac->pe = 0;
+        return;
+    case  0:
+        cs->exception_index = EXCP_YIELD;
+        cpu_loop_exit(cs);
+        return;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+void HELPER(sev)(CPUARMState *env)
+{
+    CPUState *cs = CPU(arm_env_get_cpu(env));
+    CPUState *i;
+
+    for (i = first_cpu; i; i = CPU_NEXT(i)) {
+        ARMCPU *ac = ARM_CPU(i);
+        ac->pe = 1;
+        if (i == cs || i->halt_pin || i->reset_pin || i->arch_halt_pin) {
+            continue;
+        }
+        cpu_reset_interrupt(i, CPU_INTERRUPT_HALT);
+    }
+}
+
+void HELPER(sevl)(CPUARMState *env)
+{
+    ARMCPU *ac = arm_env_get_cpu(env);
+
+    g_assert(!parallel_cpus);
+
+    ac->pe = 1;
 }
 
 void HELPER(yield)(CPUARMState *env)
 {
     ARMCPU *cpu = arm_env_get_cpu(env);
     CPUState *cs = CPU(cpu);
+
+    /* When running in MTTCG we don't generate jumps to the yield and
+     * WFE helpers as it won't affect the scheduling of other vCPUs.
+     * If we wanted to more completely model WFE/SEV so we don't busy
+     * spin unnecessarily we would need to do something more involved.
+     */
+    g_assert(!parallel_cpus);
 
     /* This is a non-trappable hint instruction that generally indicates
      * that the guest is currently busy-looping. Yield control back to the
@@ -487,7 +552,9 @@ void HELPER(cpsr_write_eret)(CPUARMState *env, uint32_t val)
      */
     env->regs[15] &= (env->thumb ? ~1 : ~3);
 
+    qemu_mutex_lock_iothread();
     arm_call_el_change_hook(arm_env_get_cpu(env));
+    qemu_mutex_unlock_iothread();
 }
 
 /* Access to user mode registers from privileged modes.  */
@@ -735,28 +802,58 @@ void HELPER(set_cp_reg)(CPUARMState *env, void *rip, uint32_t value)
 {
     const ARMCPRegInfo *ri = rip;
 
-    ri->writefn(env, ri, value);
+    if (ri->type & ARM_CP_IO) {
+        qemu_mutex_lock_iothread();
+        ri->writefn(env, ri, value);
+        qemu_mutex_unlock_iothread();
+    } else {
+        ri->writefn(env, ri, value);
+    }
 }
 
 uint32_t HELPER(get_cp_reg)(CPUARMState *env, void *rip)
 {
     const ARMCPRegInfo *ri = rip;
+    uint32_t res;
 
-    return ri->readfn(env, ri);
+    if (ri->type & ARM_CP_IO) {
+        qemu_mutex_lock_iothread();
+        res = ri->readfn(env, ri);
+        qemu_mutex_unlock_iothread();
+    } else {
+        res = ri->readfn(env, ri);
+    }
+
+    return res;
 }
 
 void HELPER(set_cp_reg64)(CPUARMState *env, void *rip, uint64_t value)
 {
     const ARMCPRegInfo *ri = rip;
 
-    ri->writefn(env, ri, value);
+    if (ri->type & ARM_CP_IO) {
+        qemu_mutex_lock_iothread();
+        ri->writefn(env, ri, value);
+        qemu_mutex_unlock_iothread();
+    } else {
+        ri->writefn(env, ri, value);
+    }
 }
 
 uint64_t HELPER(get_cp_reg64)(CPUARMState *env, void *rip)
 {
     const ARMCPRegInfo *ri = rip;
+    uint64_t res;
 
-    return ri->readfn(env, ri);
+    if (ri->type & ARM_CP_IO) {
+        qemu_mutex_lock_iothread();
+        res = ri->readfn(env, ri);
+        qemu_mutex_unlock_iothread();
+    } else {
+        res = ri->readfn(env, ri);
+    }
+
+    return res;
 }
 
 void HELPER(msr_i_pstate)(CPUARMState *env, uint32_t op, uint32_t imm)
@@ -989,7 +1086,9 @@ void HELPER(exception_return)(CPUARMState *env)
                       cur_el, new_el, env->pc);
     }
 
+    qemu_mutex_lock_iothread();
     arm_call_el_change_hook(arm_env_get_cpu(env));
+    qemu_mutex_unlock_iothread();
 
     return;
 

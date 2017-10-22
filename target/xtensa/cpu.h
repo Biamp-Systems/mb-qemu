@@ -212,6 +212,7 @@ enum {
 #define MAX_NCCOMPARE 3
 #define MAX_TLB_WAY_SIZE 8
 #define MAX_NDBREAK 2
+#define MAX_NMEMORY 4
 
 #define REGION_PAGE_MASK 0xe0000000
 
@@ -321,6 +322,14 @@ typedef struct XtensaCcompareTimer {
     QEMUTimer *timer;
 } XtensaCcompareTimer;
 
+typedef struct XtensaMemory {
+    unsigned num;
+    struct XtensaMemoryRegion {
+        uint32_t addr;
+        uint32_t size;
+    } location[MAX_NMEMORY];
+} XtensaMemory;
+
 struct XtensaConfig {
     const char *name;
     uint64_t options;
@@ -351,6 +360,13 @@ struct XtensaConfig {
     unsigned icache_ways;
     unsigned dcache_ways;
     uint32_t memctl_mask;
+
+    XtensaMemory instrom;
+    XtensaMemory instram;
+    XtensaMemory datarom;
+    XtensaMemory dataram;
+    XtensaMemory sysrom;
+    XtensaMemory sysram;
 
     uint32_t configid[2];
 
@@ -467,6 +483,7 @@ void xtensa_translate_init(void);
 void xtensa_breakpoint_handler(CPUState *cs);
 void xtensa_finalize_config(XtensaConfig *config);
 void xtensa_register_core(XtensaConfigList *node);
+void xtensa_sim_open_console(Chardev *chr);
 void check_interrupts(CPUXtensaState *s);
 void xtensa_irq_init(CPUXtensaState *env);
 void *xtensa_get_extint(CPUXtensaState *env, unsigned extint);

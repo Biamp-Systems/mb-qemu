@@ -6,7 +6,7 @@ Generate trace/generated-helpers.c.
 """
 
 __author__     = "Lluís Vilanova <vilanova@ac.upc.edu>"
-__copyright__  = "Copyright 2012-2016, Lluís Vilanova <vilanova@ac.upc.edu>"
+__copyright__  = "Copyright 2012-2017, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
@@ -55,6 +55,7 @@ def generate(events, backend, group):
         '#include "qemu-common.h"',
         '#include "cpu.h"',
         '#include "exec/helper-proto.h"',
+        '#include "%s"' % header,
         '',
         )
 
@@ -70,10 +71,11 @@ def generate(events, backend, group):
 
         out('void %(name_tcg)s(%(args_api)s)',
             '{',
+            # NOTE: the check was already performed at TCG-generation time
             '    %(name)s(%(args_call)s);',
             '}',
             name_tcg="helper_%s_proxy" % e.api(),
-            name=e.api(),
+            name=e.api(e.QEMU_TRACE_NOCHECK),
             args_api=e_args_api,
             args_call=", ".join(e_args_call.casted()),
             )

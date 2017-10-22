@@ -54,14 +54,14 @@
     struct {                               \
         uint8_t op;                        \
         union {                            \
-            uint16_t imm16;                \
-            int16_t imm16s;                \
-        };                                 \
+            uint16_t u;                    \
+            int16_t s;                     \
+        } imm16;                           \
         uint8_t b;                         \
         uint8_t a;                         \
     } (instr) = {                          \
         .op    = extract32((code), 0, 6),  \
-        .imm16 = extract32((code), 6, 16), \
+        .imm16.u = extract32((code), 6, 16), \
         .b     = extract32((code), 22, 5), \
         .a     = extract32((code), 27, 5), \
     }
@@ -171,7 +171,7 @@ static void gen_goto_tb(DisasContext *dc, int n, uint32_t dest)
     if (use_goto_tb(dc, dest)) {
         tcg_gen_goto_tb(n);
         tcg_gen_movi_tl(dc->cpu_R[R_PC], dest);
-        tcg_gen_exit_tb((tcg_target_long)tb + n);
+        tcg_gen_exit_tb((uintptr_t)tb + n);
     } else {
         tcg_gen_movi_tl(dc->cpu_R[R_PC], dest);
         tcg_gen_exit_tb(0);
@@ -231,7 +231,7 @@ static void gen_ldx(DisasContext *dc, uint32_t code, uint32_t flags)
         data = tcg_temp_new();
     }
 
-    tcg_gen_addi_tl(addr, load_gpr(dc, instr.a), instr.imm16s);
+    tcg_gen_addi_tl(addr, load_gpr(dc, instr.a), instr.imm16.s);
     tcg_gen_qemu_ld_tl(data, addr, dc->mem_idx, flags);
 
     if (unlikely(instr.b == R_ZERO)) {
@@ -248,7 +248,7 @@ static void gen_stx(DisasContext *dc, uint32_t code, uint32_t flags)
     TCGv val = load_gpr(dc, instr.b);
 
     TCGv addr = tcg_temp_new();
-    tcg_gen_addi_tl(addr, load_gpr(dc, instr.a), instr.imm16s);
+    tcg_gen_addi_tl(addr, load_gpr(dc, instr.a), instr.imm16.s);
     tcg_gen_qemu_st_tl(val, addr, dc->mem_idx, flags);
     tcg_temp_free(addr);
 }
@@ -258,7 +258,7 @@ static void br(DisasContext *dc, uint32_t code, uint32_t flags)
 {
     I_TYPE(instr, code);
 
-    gen_goto_tb(dc, 0, dc->pc + 4 + (instr.imm16s & -4));
+    gen_goto_tb(dc, 0, dc->pc + 4 + (instr.imm16.s & -4));
     dc->is_jmp = DISAS_TB_JUMP;
 }
 
@@ -270,7 +270,7 @@ static void gen_bxx(DisasContext *dc, uint32_t code, uint32_t flags)
     tcg_gen_brcond_tl(flags, dc->cpu_R[instr.a], dc->cpu_R[instr.b], l1);
     gen_goto_tb(dc, 0, dc->pc + 4);
     gen_set_label(l1);
-    gen_goto_tb(dc, 1, dc->pc + 4 + (instr.imm16s & -4));
+    gen_goto_tb(dc, 1, dc->pc + 4 + (instr.imm16.s & -4));
     dc->is_jmp = DISAS_TB_JUMP;
 }
 
@@ -283,8 +283,8 @@ static void (fname)(DisasContext *dc, uint32_t code, uint32_t flags)         \
                         (op3));                                              \
 }
 
-gen_i_cmpxx(gen_cmpxxsi, instr.imm16s)
-gen_i_cmpxx(gen_cmpxxui, instr.imm16)
+gen_i_cmpxx(gen_cmpxxsi, instr.imm16.s)
+gen_i_cmpxx(gen_cmpxxui, instr.imm16.u)
 
 /* Math/logic instructions */
 #define gen_i_math_logic(fname, insn, resimm, op3)                          \
@@ -301,16 +301,16 @@ static void (fname)(DisasContext *dc, uint32_t code, uint32_t flags)        \
     }                                                                       \
 }
 
-gen_i_math_logic(addi,  addi, 1, instr.imm16s)
-gen_i_math_logic(muli,  muli, 0, instr.imm16s)
+gen_i_math_logic(addi,  addi, 1, instr.imm16.s)
+gen_i_math_logic(muli,  muli, 0, instr.imm16.s)
 
-gen_i_math_logic(andi,  andi, 0, instr.imm16)
-gen_i_math_logic(ori,   ori,  1, instr.imm16)
-gen_i_math_logic(xori,  xori, 1, instr.imm16)
+gen_i_math_logic(andi,  andi, 0, instr.imm16.u)
+gen_i_math_logic(ori,   ori,  1, instr.imm16.u)
+gen_i_math_logic(xori,  xori, 1, instr.imm16.u)
 
-gen_i_math_logic(andhi, andi, 0, instr.imm16 << 16)
-gen_i_math_logic(orhi , ori,  1, instr.imm16 << 16)
-gen_i_math_logic(xorhi, xori, 1, instr.imm16 << 16)
+gen_i_math_logic(andhi, andi, 0, instr.imm16.u << 16)
+gen_i_math_logic(orhi , ori,  1, instr.imm16.u << 16)
+gen_i_math_logic(xorhi, xori, 1, instr.imm16.u << 16)
 
 /* Prototype only, defined below */
 static void handle_r_type_instr(DisasContext *dc, uint32_t code,
@@ -817,10 +817,9 @@ static void gen_exception(DisasContext *dc, uint32_t excp)
 }
 
 /* generate intermediate code for basic block 'tb'.  */
-void gen_intermediate_code(CPUNios2State *env, TranslationBlock *tb)
+void gen_intermediate_code(CPUState *cs, TranslationBlock *tb)
 {
-    Nios2CPU *cpu = nios2_env_get_cpu(env);
-    CPUState *cs = CPU(cpu);
+    CPUNios2State *env = cs->env_ptr;
     uint32_t pc_start = tb->pc;
     DisasContext dc1, *dc = &dc1;
     int num_insns;
@@ -970,6 +969,7 @@ void nios2_tcg_init(void)
     int i;
 
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
+    tcg_ctx.tcg_env = cpu_env;
 
     for (i = 0; i < NUM_CORE_REGS; i++) {
         cpu_R[i] = tcg_global_mem_new(cpu_env,

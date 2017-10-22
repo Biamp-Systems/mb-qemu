@@ -103,33 +103,30 @@ typedef struct DeviceClass {
     Property *props;
 
     /*
-     * Shall we hide this device model from -device / device_add?
+     * Can this device be instantiated with -device / device_add?
      * All devices should support instantiation with device_add, and
      * this flag should not exist.  But we're not there, yet.  Some
      * devices fail to instantiate with cryptic error messages.
      * Others instantiate, but don't work.  Exposing users to such
-     * behavior would be cruel; this flag serves to protect them.  It
-     * should never be set without a comment explaining why it is set.
+     * behavior would be cruel; clearing this flag will protect them.
+     * It should never be cleared without a comment explaining why it
+     * is cleared.
      * TODO remove once we're there
      */
-    bool cannot_instantiate_with_device_add_yet;
-    /*
-     * Does this device model survive object_unref(object_new(TNAME))?
-     * All device models should, and this flag shouldn't exist.  Some
-     * devices crash in object_new(), some crash or hang in
-     * object_unref().  Makes introspecting properties with
-     * qmp_device_list_properties() dangerous.  Bad, because it's used
-     * by -device FOO,help.  This flag serves to protect that code.
-     * It should never be set without a comment explaining why it is
-     * set.
-     * TODO remove once we're there
-     */
-    bool cannot_destroy_with_object_finalize_yet;
-
+    bool user_creatable;
     bool hotpluggable;
 
     /* callbacks */
     void (*reset)(DeviceState *dev);
+    void (*halt)(DeviceState *dev);
+    void (*unhalt)(DeviceState *dev);
+
+    /* callbacks for setting of power state */
+    void (*pwr_cntrl)(void *opaque, int n, int level);
+    void (*hlt_cntrl)(void *opaque, int n, int level);
+    /* reset control */
+    void (*rst_cntrl)(void *opaque, int n, int level);
+
     DeviceRealize realize;
     DeviceUnrealize unrealize;
 
@@ -152,6 +149,12 @@ struct NamedGPIOList {
     QLIST_ENTRY(NamedGPIOList) node;
 };
 
+typedef struct PowerState {
+    bool power;
+    bool halt;
+    bool active;
+} PowerState;
+
 /**
  * DeviceState:
  * @realized: Indicates whether the device has been fully constructed.
@@ -164,7 +167,7 @@ struct DeviceState {
     Object parent_obj;
     /*< public >*/
 
-    const char *id;
+    char *id;
     bool realized;
     bool pending_deleted_event;
     QemuOpts *opts;
@@ -175,6 +178,7 @@ struct DeviceState {
     int num_child_bus;
     int instance_id_alias;
     int alias_required_for_version;
+    PowerState ps;
 };
 
 struct DeviceListener {
@@ -233,16 +237,29 @@ struct BusState {
     QLIST_ENTRY(BusState) sibling;
 };
 
+/**
+ * Property:
+ * @set_default: true if the default value should be set from @defval,
+ *    in which case @info->set_default_value must not be NULL
+ *    (if false then no default value is set by the property system
+ *     and the field retains whatever value it was given by instance_init).
+ * @defval: default value for the property. This is used only if @set_default
+ *     is true.
+ */
 struct Property {
     const char   *name;
-    PropertyInfo *info;
+    const PropertyInfo *info;
     ptrdiff_t    offset;
     uint8_t      bitnr;
-    QType        qtype;
-    int64_t      defval;
+    bool         set_default;
+    union {
+        int64_t i;
+        uint64_t u;
+    } defval;
     int          arrayoffset;
-    PropertyInfo *arrayinfo;
+    const PropertyInfo *arrayinfo;
     int          arrayfieldsize;
+    const char   *link_type;
 };
 
 struct PropertyInfo {
@@ -250,6 +267,8 @@ struct PropertyInfo {
     const char *description;
     const char * const *enum_table;
     int (*print)(DeviceState *dev, Property *prop, char *dest, size_t len);
+    void (*set_default_value)(Object *obj, const Property *prop);
+    void (*create)(Object *obj, Property *prop, Error **errp);
     ObjectPropertyAccessor *get;
     ObjectPropertyAccessor *set;
     ObjectPropertyRelease *release;
@@ -291,6 +310,8 @@ bool qdev_machine_modified(void);
 
 qemu_irq qdev_get_gpio_in(DeviceState *dev, int n);
 qemu_irq qdev_get_gpio_in_named(DeviceState *dev, const char *name, int n);
+qemu_irq qdev_get_gpio_out(DeviceState *dev, int n);
+qemu_irq qdev_get_gpio_out_named(DeviceState *dev, const char *name, int n);
 
 void qdev_connect_gpio_out(DeviceState *dev, int n, qemu_irq pin);
 void qdev_connect_gpio_out_named(DeviceState *dev, const char *name, int n,
@@ -312,6 +333,7 @@ void qdev_init_gpio_in_named(DeviceState *dev, qemu_irq_handler handler,
 void qdev_init_gpio_out_named(DeviceState *dev, qemu_irq *pins,
                               const char *name, int n);
 
+void qdev_pass_all_gpios(DeviceState *dev, DeviceState *container);
 void qdev_pass_gpios(DeviceState *dev, DeviceState *container,
                      const char *name);
 
@@ -377,6 +399,20 @@ void qdev_machine_init(void);
  */
 void device_reset(DeviceState *dev);
 
+/**
+ * @device_halt
+ *
+ * Halt a single device (by calling the halt method).
+ */
+void device_halt(DeviceState *dev);
+
+/**
+ * @device_unhalt
+ *
+ * Unhalt a single device (by calling the unhalt method).
+ */
+void device_unhalt(DeviceState *dev);
+
 const struct VMStateDescription *qdev_get_vmsd(DeviceState *dev);
 
 const char *qdev_fw_name(DeviceState *dev);
@@ -386,7 +422,8 @@ Object *qdev_get_machine(void);
 /* FIXME: make this a link<> */
 void qdev_set_parent_bus(DeviceState *dev, BusState *bus);
 
-extern int qdev_hotplug;
+extern bool qdev_hotplug;
+extern bool qdev_hot_removed;
 
 char *qdev_get_dev_path(DeviceState *dev);
 

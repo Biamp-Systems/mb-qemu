@@ -21,7 +21,7 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
 #include "hw/nios2/altera_juart.h"
 
 #define R_DATA        0
@@ -213,7 +213,7 @@ static int altera_juart_init(SysBusDevice *dev)
                           TYPE_ALTERA_JUART, 2 * 4);
     sysbus_init_mmio(dev, &s->mmio);
     qemu_chr_fe_set_handlers(&s->chr, juart_can_receive, juart_receive,
-                             juart_event, s, NULL, true);
+                             juart_event, NULL, s, NULL, true);
     return 0;
 }
 

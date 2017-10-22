@@ -26,33 +26,43 @@
  */
 
 #include "qemu/osdep.h"
+#include "cpu.h"
 #include "hw/sysbus.h"
+#include "qemu/log.h"
 #include "net/net.h"
 #include "hw/block/flash.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "sysemu/device_tree.h"
-#include "target/microblaze/cpu.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
-#include "qemu/config-file.h"
+#include "qemu/error-report.h"
 #include "qapi/error.h"
+#include "sysemu/qtest.h"
+#include "qemu/config-file.h"
 
 #include "hw/fdt_generic_util.h"
 #include "hw/fdt_generic_devices.h"
 
 #include "boot.h"
 
-#define VAL(name) qemu_fdt_getprop_cell(fdt, node_path, name, NULL, 0, false, \
-                                                NULL)
+#define VAL(name) qemu_fdt_getprop_cell(fdt_g, node_path, name, NULL, 0, false, NULL)
+
+#define IS_PETALINUX_MACHINE \
+    (!strcmp(MACHINE_GET_CLASS(machine)->name, MACHINE_NAME "-plnx"))
+
+#define QTEST_RUNNING (qtest_enabled() && qtest_driver())
+
+/* FIXME: delete */
+static void *fdt_g;
 
 static void
-microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
+microblaze_generic_fdt_reset(MicroBlazeCPU *cpu)
 {
     CPUMBState *env = &cpu->env;
 
     char node_path[DT_PATH_LENGTH];
-    qemu_fdt_get_node_by_name(fdt, node_path, "cpu@");
+    qemu_fdt_get_node_by_name(fdt_g, node_path, "cpu");
     int t;
     int use_exc = 0;
 
@@ -63,21 +73,9 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
                         | PVR2_I_LMB_MASK \
                         | 0;
 
-    if (VAL("xlnx,pvr")) {
-        env->sregs[SR_MSR] |= MSR_PVR;
-    }
-
     /* Even if we don't have PVR's, we fill out everything
        because QEMU will internally follow what the pvr regs
        state about the HW.  */
-
-    if (VAL("xlnx,pvr") == 2) {
-        env->pvr.regs[0] |= PVR0_PVR_FULL_MASK;
-    }
-
-    if (VAL("xlnx,endianness")) {
-        env->pvr.regs[0] |= PVR0_ENDI_MASK;
-    }
 
     if (VAL("xlnx,use-barrel")) {
         env->pvr.regs[0] |= PVR0_USE_BARREL_MASK;
@@ -95,15 +93,6 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
         env->pvr.regs[2] |= PVR2_USE_HW_MUL_MASK;
         if (t >= 2) {
             env->pvr.regs[2] |= PVR2_USE_MUL64_MASK;
-        }
-    }
-
-    t = VAL("xlnx,use-fpu");
-    if (t) {
-        env->pvr.regs[0] |= PVR0_USE_FPU_MASK;
-        env->pvr.regs[2] |= PVR2_USE_FPU_MASK;
-        if (t > 1) {
-            env->pvr.regs[2] |= PVR2_USE_FPU2_MASK;
         }
     }
 
@@ -144,23 +133,15 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
         use_exc = 1;
     }
 
-    if (VAL("xlnx,fpu-exception")) {
-        env->pvr.regs[2] |= PVR2_FPU_EXC_MASK;
-        use_exc = 1;
-    }
-
     env->pvr.regs[0] |= VAL("xlnx,pvr-user1") & 0xff;
     env->pvr.regs[1] = VAL("xlnx,pvr-user2");
 
     /* MMU regs.  */
     t = VAL("xlnx,use-mmu");
     if (use_exc || t) {
-        env->pvr.regs[0] |= PVR0_USE_EXC_MASK;
+        env->pvr.regs[0] |= PVR0_USE_EXC_MASK ;
     }
 
-    if (t) {
-        env->pvr.regs[0] |= PVR0_USE_MMU_MASK;
-    }
     env->pvr.regs[11] = t << 30;
     t = VAL("xlnx,mmu-zones");
     env->pvr.regs[11] |= t << 17;
@@ -187,13 +168,16 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
             {"spartan3adsp", 0xc},
             {"spartan6", 0xd},
             {"virtex6", 0xe},
+            {"virtex7", 0xf},
+            {"kintex7", 0x10},
+            {"artix7", 0x11},
+            {"zynq7000", 0x12},
             {"spartan2", 0xf0},
             {NULL, 0},
         };
         unsigned int i = 0;
 
-        str = qemu_fdt_getprop(fdt, node_path, "xlnx,family", NULL,
-                                    false, NULL);
+        str = qemu_fdt_getprop(fdt_g, node_path, "xlnx,family", NULL, false, NULL);
         while (arch_lookup[i].name && str) {
             if (strcmp(arch_lookup[i].name, str) == 0) {
                 break;
@@ -204,59 +188,6 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
             env->pvr.regs[10] = 0x0c000000; /* spartan 3a dsp family.  */
         } else {
             env->pvr.regs[10] = arch_lookup[i].arch << 24;
-        }
-        g_free(str);
-    }
-
-    {
-        char *str;
-        const struct {
-            const char *name;
-            unsigned int arch;
-        } cpu_lookup[] = {
-            /* These key value are as per MBV field in PVR0 */
-            {"5.00.a", 0x01},
-            {"5.00.b", 0x02},
-            {"5.00.c", 0x03},
-            {"6.00.a", 0x04},
-            {"6.00.b", 0x06},
-            {"7.00.a", 0x05},
-            {"7.00.b", 0x07},
-            {"7.10.a", 0x08},
-            {"7.10.b", 0x09},
-            {"7.10.c", 0x0a},
-            {"7.10.d", 0x0b},
-            {"7.20.a", 0x0c},
-            {"7.20.b", 0x0d},
-            {"7.20.c", 0x0e},
-            {"7.20.d", 0x0f},
-            {"7.30.a", 0x10},
-            {"7.30.b", 0x11},
-            {"8.00.a", 0x12},
-            {"8.00.b", 0x13},
-            {"8.10.a", 0x14},
-            /* FIXME There is no keycode defined in MBV for these versions */
-            {"2.10.a", 0x10},
-            {"3.00.a", 0x20},
-            {"4.00.a", 0x30},
-            {"4.00.b", 0x40},
-            {NULL, 0},
-        };
-        unsigned int i = 0;
-
-        str = qemu_fdt_getprop(fdt, node_path, "model", NULL, false, NULL);
-
-        while (cpu_lookup[i].name && str) {
-            if (strcmp(cpu_lookup[i].name, str + strlen("microblaze,")) == 0) {
-                break;
-            }
-            i++;
-        }
-        if (!str || !cpu_lookup[i].arch) {
-            fprintf(stderr, "unable to find MicroBlaze model.\n");
-            env->pvr.regs[0] |= 0xb << 8;
-        } else {
-            env->pvr.regs[0] |= cpu_lookup[i].arch << 8;
         }
         g_free(str);
     }
@@ -280,6 +211,17 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu, void *fdt)
         env->pvr.regs[8] = VAL("i-cache-baseaddr");
         env->pvr.regs[9] = VAL("i-cache-highaddr");
     }
+    if (VAL("qemu,halt")) {
+        cpu_interrupt(ENV_GET_CPU(env), CPU_INTERRUPT_HALT);
+    }
+}
+
+static void secondary_cpu_reset(void *opaque)
+{
+    MicroBlazeCPU *cpu = MICROBLAZE_CPU(opaque);
+
+    /* Configure secondary cores.  */
+    microblaze_generic_fdt_reset(cpu);
 }
 
 #define LMB_BRAM_SIZE  (128 * 1024)
@@ -292,85 +234,194 @@ int endian = 1;
 int endian;
 #endif
 
-static void microblaze_generic_fdt_init(MachineState *machine)
+static void
+microblaze_generic_fdt_init(MachineState *machine)
 {
-    MicroBlazeCPU *cpu;
-    MemoryRegion *address_space_mem = get_system_memory();
-    MemoryRegion *lmb_bram = g_new(MemoryRegion, 1);
-    MemoryRegion *ddr_ram = g_new(MemoryRegion, 1);
-    hwaddr ram_base;
+    CPUState *cpu;
+    ram_addr_t ram_kernel_base = 0, ram_kernel_size = 0;
     void *fdt = NULL;
-    const char *dtb_arg;
+    const char *dtb_arg, *hw_dtb_arg;
     QemuOpts *machine_opts;
+    int fdt_size;
 
     /* for memory node */
     char node_path[DT_PATH_LENGTH];
+    FDTMachineInfo *fdti;
+    MemoryRegion *main_mem;
+
+    /* For DMA node */
+    char dma_path[DT_PATH_LENGTH] = { 0 };
+    uint32_t memory_phandle;
+
+    /* For Ethernet nodes */
+    char **eth_paths;
+    char *phy_path;
+    char *mdio_path;
+    uint32_t n_eth;
+    uint32_t prop_val;
 
     machine_opts = qemu_opts_find(qemu_find_opts("machine"), 0);
     if (!machine_opts) {
         goto no_dtb_arg;
     }
     dtb_arg = qemu_opt_get(machine_opts, "dtb");
-    if (!dtb_arg) {
+    hw_dtb_arg = qemu_opt_get(machine_opts, "hw-dtb");
+    if (!dtb_arg && !hw_dtb_arg) {
         goto no_dtb_arg;
     }
 
-    fdt = load_device_tree(dtb_arg, NULL);
+    /* If the user only provided a -dtb, use it as the hw description.  */
+    if (!hw_dtb_arg) {
+        hw_dtb_arg = dtb_arg;
+    }
+
+    fdt = load_device_tree(hw_dtb_arg, &fdt_size);
     if (!fdt) {
-        hw_error("Error: Unable to load Device Tree %s\n", dtb_arg);
+        hw_error("Error: Unable to load Device Tree %s\n", hw_dtb_arg);
         return;
     }
 
-    /* init CPUs */
-    if (machine->cpu_model == NULL) {
-        machine->cpu_model = "microblaze";
+    if (IS_PETALINUX_MACHINE) {
+        /* Mark the simple-bus as incompatible as it breaks the Microblaze
+         * PetaLinux boot
+         */
+        add_to_compat_table(NULL, "compatible:simple-bus", NULL);
     }
-    cpu = cpu_mb_init(machine->cpu_model);
 
-    /* find memory node */
-    /* FIXME it could be good to fix case when you don't find memory node */
-    qemu_fdt_get_node_by_name(fdt, node_path, "memory@");
-    ram_base = qemu_fdt_getprop_cell(fdt, node_path, "reg", NULL, 0,
-                                            false, &error_abort);
-    ram_size = qemu_fdt_getprop_cell(fdt, node_path, "reg", NULL, 1,
-                                            false, &error_abort);
+    /* find memory node or add new one if needed */
+    while (qemu_fdt_get_node_by_name(fdt, node_path, "memory")) {
+        qemu_fdt_add_subnode(fdt, "/memory@0");
+        qemu_fdt_setprop_cells(fdt, "/memory@0", "reg", 0, machine->ram_size);
+    }
 
-    /* FIXME: instantiate from FDT like evrything else */
-    /* Attach emulated BRAM through the LMB.  */
-    memory_region_init_ram(lmb_bram, NULL, "microblaze_fdt.lmb_bram",
-                           LMB_BRAM_SIZE, &error_abort);
-    vmstate_register_ram_global(lmb_bram);
-    memory_region_add_subregion(address_space_mem, 0, lmb_bram);
+    if (!qemu_fdt_getprop(fdt, "/memory", "compatible", NULL, 0, NULL)) {
+        qemu_fdt_setprop_string(fdt, "/memory", "compatible",
+                                "qemu:memory-region");
+        qemu_fdt_setprop_cells(fdt, "/memory", "qemu,ram", 1);
+    }
 
-    memory_region_init_ram(ddr_ram, NULL, "microblaze_fdt.ddr_ram", ram_size,
-		           &error_abort);
-    vmstate_register_ram_global(ddr_ram);
-    memory_region_add_subregion(address_space_mem, ram_base, ddr_ram);
+    if (IS_PETALINUX_MACHINE) {
+        /* If using a *-plnx machine, the AXI DMA memory links are not included
+         * in the DTB by default. To avoid seg faults, add the links in here if
+         * they have not already been added by the user
+         */
+        qemu_fdt_get_node_by_name(fdt, dma_path, "dma");
+
+        if (strcmp(dma_path, "") != 0) {
+            memory_phandle = qemu_fdt_check_phandle(fdt, node_path);
+
+            if (!memory_phandle) {
+                memory_phandle = qemu_fdt_alloc_phandle(fdt);
+
+                qemu_fdt_setprop_cells(fdt, "/memory", "linux,phandle",
+                                       memory_phandle);
+                qemu_fdt_setprop_cells(fdt, "/memory", "phandle",
+                                       memory_phandle);
+            }
+
+            if (!qemu_fdt_getprop(fdt, dma_path, "sg", NULL, 0, NULL)) {
+                qemu_fdt_setprop_phandle(fdt, dma_path, "sg", node_path);
+            }
+
+            if (!qemu_fdt_getprop(fdt, dma_path, "s2mm", NULL, 0, NULL)) {
+                qemu_fdt_setprop_phandle(fdt, dma_path, "s2mm", node_path);
+            }
+
+            if (!qemu_fdt_getprop(fdt, dma_path, "mm2s", NULL, 0, NULL)) {
+                qemu_fdt_setprop_phandle(fdt, dma_path, "mm2s", node_path);
+            }
+        }
+
+        /* Copy phyaddr value from phy node reg property */
+        n_eth = qemu_fdt_get_n_nodes_by_name(fdt, &eth_paths, "ethernet");
+
+        while (n_eth--) {
+            mdio_path = qemu_fdt_get_child_by_name(fdt, eth_paths[n_eth],
+                                                       "mdio");
+            if (mdio_path) {
+                phy_path = qemu_fdt_get_child_by_name(fdt, mdio_path,
+                                                          "phy");
+                if (phy_path) {
+                    prop_val = qemu_fdt_getprop_cell(fdt, phy_path, "reg", NULL, 0,
+                                                     NULL, &error_abort);
+                    qemu_fdt_setprop_cell(fdt, eth_paths[n_eth], "xlnx,phyaddr",
+                                          prop_val);
+                    g_free(phy_path);
+                } else {
+                    qemu_log_mask(LOG_GUEST_ERROR, "phy not found in %s",
+                                  mdio_path);
+                }
+                g_free(mdio_path);
+            }
+            g_free(eth_paths[n_eth]);
+        }
+        g_free(eth_paths);
+    }
 
     /* Instantiate peripherals from the FDT.  */
-    fdt_init_destroy_fdti(
-        fdt_generic_create_machine(fdt,
-                            qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ)));
+    fdti = fdt_generic_create_machine(fdt, NULL);
+    main_mem = MEMORY_REGION(object_resolve_path(node_path, NULL));
 
-    microblaze_load_kernel(cpu, ram_base, ram_size,
-                           machine->initrd_filename,
-                           NULL,
-                           microblaze_generic_fdt_reset, fdt);
+    ram_kernel_base = object_property_get_int(OBJECT(main_mem), "addr", NULL);
+    ram_kernel_size = object_property_get_int(OBJECT(main_mem), "size", NULL);
+
+    if (!memory_region_is_mapped(main_mem)) {
+        /* If the memory region is not mapped, map it here.
+         * It has to be mapped somewhere, so guess that the base address
+         * is where the kernel starts
+         */
+        memory_region_add_subregion(get_system_memory(), ram_kernel_base,
+                                    main_mem);
+
+        if (ram_kernel_base && IS_PETALINUX_MACHINE) {
+            /* If the memory added is at an offset from zero QEMU will error
+             * when an ISR/exception is triggered. Add a small amount of hack
+             * RAM to handle this.
+             */
+            MemoryRegion *hack_ram = g_new(MemoryRegion, 1);
+            memory_region_init_ram(hack_ram, NULL, "hack_ram", 0x1000,
+                                   &error_abort);
+            vmstate_register_ram_global(hack_ram);
+            memory_region_add_subregion(get_system_memory(), 0, hack_ram);
+        }
+    }
+
+    fdt_init_destroy_fdti(fdti);
+
+    fdt_g = fdt;
+    microblaze_load_kernel(MICROBLAZE_CPU(first_cpu), ram_kernel_base,
+                           ram_kernel_size, machine->initrd_filename, NULL,
+                           microblaze_generic_fdt_reset, 0, fdt, fdt_size);
+
+    /* Register FDT to prop mapper for secondary cores.  */
+    cpu = CPU_NEXT(first_cpu);
+    while (cpu) {
+        qemu_register_reset(secondary_cpu_reset, cpu);
+        cpu = CPU_NEXT(cpu);
+    }
+
     return;
 no_dtb_arg:
-    hw_error("DTB must be specified for %s machine model\n", MACHINE_NAME);
+    if (!QTEST_RUNNING) {
+        hw_error("DTB must be specified for %s machine model\n", MACHINE_NAME);
+    }
     return;
 }
 
 static void microblaze_generic_fdt_machine_init(MachineClass *mc)
 {
-    mc->desc = "MicroBlaze design based on the peripherals specified in the device-tree.";
+    mc->desc = "Microblaze device tree driven machine model";
     mc->init = microblaze_generic_fdt_init;
-    mc->is_default = 0;
 }
 
-DEFINE_MACHINE(MACHINE_NAME, microblaze_generic_fdt_machine_init)
+static void microblaze_generic_fdt_plnx_machine_init(MachineClass *mc)
+{
+    mc->desc = "Microblaze device tree driven machine model for PetaLinux";
+    mc->init = microblaze_generic_fdt_init;
+}
 
-fdt_register_compatibility(simple_bus_fdt_init, "xlnx,compound");
-fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0,
-    &endian);
+fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "compatible:cfi-flash",
+                                  0, &endian);
+
+DEFINE_MACHINE(MACHINE_NAME, microblaze_generic_fdt_machine_init)
+DEFINE_MACHINE(MACHINE_NAME "-plnx", microblaze_generic_fdt_plnx_machine_init)

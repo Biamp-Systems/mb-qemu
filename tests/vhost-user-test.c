@@ -16,7 +16,7 @@
 #include "qemu/option.h"
 #include "qemu/range.h"
 #include "qemu/sockets.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
 #include "sysemu/sysemu.h"
 #include "libqos/libqos.h"
 #include "libqos/pci-pc.h"
@@ -139,6 +139,7 @@ enum {
 };
 
 typedef struct TestServer {
+    QPCIBus *bus;
     gchar *socket_path;
     gchar *mig_path;
     gchar *chr_name;
@@ -160,14 +161,13 @@ static const char *root;
 
 static void init_virtio_dev(TestServer *s)
 {
-    QPCIBus *bus;
     QVirtioPCIDevice *dev;
     uint32_t features;
 
-    bus = qpci_init_pc(NULL);
-    g_assert_nonnull(bus);
+    s->bus = qpci_init_pc(NULL);
+    g_assert_nonnull(s->bus);
 
-    dev = qvirtio_pci_device_find(bus, VIRTIO_ID_NET);
+    dev = qvirtio_pci_device_find(s->bus, VIRTIO_ID_NET);
     g_assert_nonnull(dev);
 
     qvirtio_pci_device_enable(dev);
@@ -180,6 +180,7 @@ static void init_virtio_dev(TestServer *s)
     qvirtio_set_features(&dev->vdev, features);
 
     qvirtio_set_driver_ok(&dev->vdev);
+    qvirtio_pci_device_free(dev);
 }
 
 static void wait_for_fds(TestServer *s)
@@ -463,7 +464,7 @@ static void test_server_create_chr(TestServer *server, const gchar *opt)
 
     qemu_chr_fe_init(&server->chr, chr, &error_abort);
     qemu_chr_fe_set_handlers(&server->chr, chr_can_read, chr_read,
-                             chr_event, server, NULL, true);
+                             chr_event, NULL, server, NULL, true);
 }
 
 static void test_server_listen(TestServer *server)
@@ -487,10 +488,8 @@ static inline void test_server_connect(TestServer *server)
 static gboolean _test_server_free(TestServer *server)
 {
     int i;
-    Chardev *chr = qemu_chr_fe_get_driver(&server->chr);
 
-    qemu_chr_fe_deinit(&server->chr);
-    qemu_chr_delete(chr);
+    qemu_chr_fe_deinit(&server->chr, true);
 
     for (i = 0; i < server->fds_num; i++) {
         close(server->fds[i]);
@@ -507,6 +506,8 @@ static gboolean _test_server_free(TestServer *server)
     g_free(server->mig_path);
 
     g_free(server->chr_name);
+    qpci_free_pc(server->bus);
+
     g_free(server);
 
     return FALSE;

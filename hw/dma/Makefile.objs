@@ -11,6 +11,8 @@ common-obj-$(CONFIG_STP2000) += sparc32_dma.o
 common-obj-$(CONFIG_SUN4M) += sun4m_iommu.o
 common-obj-$(CONFIG_LABX) += labx_dma.o
 obj-$(CONFIG_XLNX_ZYNQMP) += xlnx_dpdma.o
+common-obj-$(CONFIG_XLNX_ZYNQMP) += xilinx-zdma.o
+common-obj-$(CONFIG_XLNX_ZYNQMP) += csu_stream_dma.o
 
 obj-$(CONFIG_OMAP) += omap_dma.o soc_dma.o
 obj-$(CONFIG_PXA2XX) += pxa2xx_dma.o

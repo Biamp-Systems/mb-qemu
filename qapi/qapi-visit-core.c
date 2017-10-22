@@ -90,6 +90,14 @@ GenericList *visit_next_list(Visitor *v, GenericList *tail, size_t size)
     return v->next_list(v, tail, size);
 }
 
+void visit_check_list(Visitor *v, Error **errp)
+{
+    trace_visit_check_list(v);
+    if (v->check_list) {
+        v->check_list(v, errp);
+    }
+}
+
 void visit_end_list(Visitor *v, void **obj)
 {
     trace_visit_end_list(v, obj);
@@ -98,15 +106,15 @@ void visit_end_list(Visitor *v, void **obj)
 
 void visit_start_alternate(Visitor *v, const char *name,
                            GenericAlternate **obj, size_t size,
-                           bool promote_int, Error **errp)
+                           Error **errp)
 {
     Error *err = NULL;
 
     assert(obj && size >= sizeof(GenericAlternate));
     assert(!(v->type & VISITOR_OUTPUT) || *obj);
-    trace_visit_start_alternate(v, name, obj, size, promote_int);
+    trace_visit_start_alternate(v, name, obj, size);
     if (v->start_alternate) {
-        v->start_alternate(v, name, obj, size, promote_int, &err);
+        v->start_alternate(v, name, obj, size, &err);
     }
     if (v->type & VISITOR_INPUT) {
         assert(v->start_alternate && !err != !*obj);
@@ -317,10 +325,11 @@ void visit_type_any(Visitor *v, const char *name, QObject **obj, Error **errp)
     error_propagate(errp, err);
 }
 
-void visit_type_null(Visitor *v, const char *name, Error **errp)
+void visit_type_null(Visitor *v, const char *name, QNull **obj,
+                     Error **errp)
 {
-    trace_visit_type_null(v, name);
-    v->type_null(v, name, errp);
+    trace_visit_type_null(v, name, obj);
+    v->type_null(v, name, obj, errp);
 }
 
 static void output_type_enum(Visitor *v, const char *name, int *obj,

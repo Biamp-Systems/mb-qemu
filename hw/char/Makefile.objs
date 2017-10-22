@@ -1,3 +1,5 @@
+common-obj-$(CONFIG_ALTERA_JUART) += altera_juart.o
+common-obj-$(CONFIG_ALTERA) += altera_uart.o
 common-obj-$(CONFIG_IPACK) += ipoctal232.o
 common-obj-$(CONFIG_ESCC) += escc.o
 common-obj-$(CONFIG_PARALLEL) += parallel.o
@@ -7,9 +9,8 @@ common-obj-$(CONFIG_SERIAL_ISA) += serial-isa.o
 common-obj-$(CONFIG_SERIAL_PCI) += serial-pci.o
 common-obj-$(CONFIG_VIRTIO) += virtio-console.o
 common-obj-$(CONFIG_XILINX) += xilinx_uartlite.o
-common-obj-$(CONFIG_ALTERA_JUART) += altera_juart.o
-common-obj-$(CONFIG_ALTERA) += altera_uart.o
-common-obj-$(CONFIG_XEN_BACKEND) += xen_console.o
+common-obj-$(CONFIG_XILINX_IOMODULE_UART) += xilinx_iomod_uart.o
+common-obj-$(CONFIG_XEN) += xen_console.o
 common-obj-$(CONFIG_CADENCE) += cadence_uart.o
 
 obj-$(CONFIG_EXYNOS4) += exynos4210_uart.o
@@ -21,6 +22,7 @@ obj-$(CONFIG_DIGIC) += digic-uart.o
 obj-$(CONFIG_STM32F2XX_USART) += stm32f2xx_usart.o
 obj-$(CONFIG_RASPI) += bcm2835_aux.o
 
+common-obj-$(CONFIG_CMSDK_APB_UART) += cmsdk-apb-uart.o
 common-obj-$(CONFIG_ETRAXFS) += etraxfs_ser.o
 common-obj-$(CONFIG_ISA_DEBUG) += debugcon.o
 common-obj-$(CONFIG_GRLIB) += grlib_apbuart.o
@@ -31,3 +33,4 @@ common-obj-$(CONFIG_MILKYMIST) += milkymist-uart.o
 common-obj-$(CONFIG_SCLPCONSOLE) += sclpconsole.o sclpconsole-lm.o
 
 obj-$(CONFIG_VIRTIO) += virtio-serial-bus.o
+obj-$(CONFIG_TERMINAL3270) += terminal3270.o

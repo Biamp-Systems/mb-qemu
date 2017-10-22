@@ -340,7 +340,7 @@ int qemu_fdt_setprop_string(void *fdt, const char *node_path,
     return r;
 }
 
-const void *qemu_fdt_getprop(void *fdt, const char *node_path,
+void *qemu_fdt_getprop(void *fdt, const char *node_path,
                        const char *property, int *lenp,
                        bool inherit, Error **errp)
 {
@@ -354,8 +354,7 @@ const void *qemu_fdt_getprop(void *fdt, const char *node_path,
     if (!r) {
         char parent[DT_PATH_LENGTH];
         if (inherit && !qemu_fdt_getparent(fdt, parent, node_path)) {
-            return qemu_fdt_getprop(fdt, parent, property, lenp, true,
-                                                                errp);
+            return qemu_fdt_getprop(fdt, parent, property, lenp, true, errp);
         }
         error_setg(errp, "%s: Couldn't get %s/%s: %s", __func__,
                   node_path, property, fdt_strerror(*lenp));
@@ -409,7 +408,7 @@ uint32_t qemu_fdt_getprop_cell(void *fdt, const char *node_path,
 {
     int len;
     uint32_t ret;
-    const uint32_t *p;
+    uint32_t *p;
 
     if (!lenp) {
         lenp = &len;
@@ -667,6 +666,64 @@ int qemu_fdt_get_node_by_name(void *fdt, char *node_path,
         fdt_get_path(fdt, offset, node_path, DT_PATH_LENGTH) : 1;
 }
 
+int qemu_fdt_get_n_nodes_by_name(void *fdt, char ***array,
+                                 const char *cmpname)
+{
+    int offset = 0;
+    char *name = NULL;
+    uint32_t n = 0;
+    char node_p[DT_PATH_LENGTH];
+    char **node_path = NULL;
+
+    do {
+        char *at;
+
+        offset = fdt_next_node(fdt, offset, NULL);
+        name = (void *)fdt_get_name(fdt, offset, NULL);
+
+        if (!name) {
+            continue;
+        }
+
+        at = memchr(name, '@', strlen(name));
+        if (!strncmp(name, cmpname, at ? at - name : strlen(name))) {
+            if (fdt_get_path(fdt, offset, node_p, DT_PATH_LENGTH) >= 0) {
+                if (node_path == NULL) {
+                    node_path = (char **) g_new(char *, 1);
+                } else {
+                    node_path = (char **) g_renew(char *, *node_path, n);
+                }
+                node_path[n] = g_strdup(node_p);
+                n++;
+            }
+        }
+    } while (offset > 0);
+
+    *array = node_path;
+    return n;
+}
+
+char *qemu_fdt_get_child_by_name(void *fdt, char *parent_path,
+                                 const char *cmpname)
+{
+    int offset = 0;
+    int parent_offset;
+    int namelen = strlen(cmpname);
+    char child_path[DT_PATH_LENGTH];
+
+    parent_offset = fdt_path_offset(fdt, parent_path);
+
+    if (parent_offset > 0) {
+        offset = fdt_subnode_offset_namelen(fdt, parent_offset,
+                                            cmpname, namelen);
+        if (fdt_get_path(fdt, offset, child_path, DT_PATH_LENGTH) == 0) {
+            return g_strdup(child_path);
+        }
+    }
+
+    return NULL;
+}
+
 int qemu_fdt_get_node_by_phandle(void *fdt, char *node_path, int phandle)
 {
     return fdt_get_path(fdt, fdt_node_offset_by_phandle(fdt, phandle),
@@ -679,7 +736,7 @@ int qemu_fdt_getparent(void *fdt, char *node_path, const char *current)
     int parent_offset = fdt_supernode_atdepth_offset(fdt, offset,
         fdt_node_depth(fdt, offset) - 1, NULL);
 
-    return parent_offset > 0 ?
+    return parent_offset >= 0 ?
         fdt_get_path(fdt, parent_offset, node_path, DT_PATH_LENGTH) : 1;
 }
 

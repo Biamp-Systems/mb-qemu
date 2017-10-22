@@ -146,11 +146,13 @@ int load_image_targphys_as(const char *filename,
     int size;
 
     size = get_image_size(filename);
-    if (size > max_sz) {
+    if (size < 0 || size > max_sz) {
         return -1;
     }
     if (size > 0) {
-        rom_add_file_fixed_as(filename, addr, -1, as);
+        if (rom_add_file_fixed_as(filename, addr, -1, as) < 0) {
+            return -1;
+        }
     }
     return size;
 }
@@ -166,7 +168,7 @@ int load_image_mr(const char *filename, MemoryRegion *mr)
 
     size = get_image_size(filename);
 
-    if (size > memory_region_size(mr)) {
+    if (size < 0 || size > memory_region_size(mr)) {
         return -1;
     }
     if (size > 0) {
@@ -435,6 +437,19 @@ int load_elf_as(const char *filename,
                 uint64_t *highaddr, int big_endian, int elf_machine,
                 int clear_lsb, int data_swab, AddressSpace *as)
 {
+    return load_elf_ram(filename, translate_fn, translate_opaque,
+                        pentry, lowaddr, highaddr, big_endian, elf_machine,
+                        clear_lsb, data_swab, as, true);
+}
+
+/* return < 0 if error, otherwise the number of bytes loaded in memory */
+int load_elf_ram(const char *filename,
+                 uint64_t (*translate_fn)(void *, uint64_t),
+                 void *translate_opaque, uint64_t *pentry, uint64_t *lowaddr,
+                 uint64_t *highaddr, int big_endian, int elf_machine,
+                 int clear_lsb, int data_swab, AddressSpace *as,
+                 bool load_rom)
+{
     int fd, data_order, target_data_order, must_swab, ret = ELF_LOAD_FAILED;
     uint8_t e_ident[EI_NIDENT];
 
@@ -473,11 +488,11 @@ int load_elf_as(const char *filename,
     if (e_ident[EI_CLASS] == ELFCLASS64) {
         ret = load_elf64(filename, fd, translate_fn, translate_opaque, must_swab,
                          pentry, lowaddr, highaddr, elf_machine, clear_lsb,
-                         data_swab, as);
+                         data_swab, as, load_rom);
     } else {
         ret = load_elf32(filename, fd, translate_fn, translate_opaque, must_swab,
                          pentry, lowaddr, highaddr, elf_machine, clear_lsb,
-                         data_swab, as);
+                         data_swab, as, load_rom);
     }
 
  fail:
@@ -527,12 +542,7 @@ static void zfree(void *x, void *addr)
 
 #define DEFLATED	8
 
-/* This is the usual maximum in uboot, so if a uImage overflows this, it would
- * overflow on real hardware too. */
-#define UBOOT_MAX_GUNZIP_BYTES (64 << 20)
-
-static ssize_t gunzip(void *dst, size_t dstlen, uint8_t *src,
-                      size_t srclen)
+ssize_t gunzip(void *dst, size_t dstlen, uint8_t *src, size_t srclen)
 {
     z_stream s;
     ssize_t dstbytes;
@@ -603,8 +613,9 @@ static int load_uboot_image(const char *filename, hwaddr *ep, hwaddr *loadaddr,
         return -1;
 
     size = read(fd, hdr, sizeof(uboot_image_header_t));
-    if (size < 0)
+    if (size < sizeof(uboot_image_header_t)) {
         goto out;
+    }
 
     bswap_uboot_header(hdr);
 
@@ -826,13 +837,20 @@ static void rom_insert(Rom *rom)
 {
     Rom *item;
 
-    if (roms_loaded) {
+    /*
+     * Xilinx: We want to allow this, remove the check
+     *
+     if (roms_loaded) {
         hw_error ("ROM images must be loaded at startup\n");
-    }
+     }
+     */
 
     /* The user didn't specify an address space, this is the default */
     if (!rom->as) {
-        rom->as = &address_space_memory;
+        /* Xilinx: Use the first CPU address space instead of the
+         * &address_space_memory variable.
+         */
+        rom->as = first_cpu->as;
     }
 
     /* List is ordered by load address in the same address space */
@@ -1098,7 +1116,7 @@ int rom_check_and_register_reset(void)
                     "(rom %s. free=0x" TARGET_FMT_plx
                     ", addr=0x" TARGET_FMT_plx ")\n",
                     rom->name, addr, rom->addr);
-            return -1;
+            /* Xilinx: Don't abort if they overlap */
         }
         addr  = rom->addr;
         addr += rom->romsize;

@@ -12,6 +12,8 @@
 #include "qemu/host-utils.h"
 #include "sysemu/replay.h"
 #include "sysemu/qtest.h"
+#include "block/aio.h"
+#include "sysemu/cpus.h"
 
 #define DELTA_ADJUST     1
 #define DELTA_NO_ADJUST -1
@@ -312,6 +314,19 @@ void ptimer_set_freq(ptimer_state *s, uint32_t freq)
    count = limit.  */
 void ptimer_set_limit(ptimer_state *s, uint64_t limit, int reload)
 {
+    /*
+     * Artificially limit timeout rate to something
+     * achievable under QEMU.  Otherwise, QEMU spends all
+     * its time generating timer interrupts, and there
+     * is no forward progress.
+     * About ten microseconds is the fastest that really works
+     * on the current generation of host machines.
+     */
+
+    if (!use_icount && limit * s->period < 10000 && s->period) {
+        limit = 10000 / s->period;
+    }
+
     s->limit = limit;
     if (reload)
         s->delta = limit;
@@ -352,4 +367,11 @@ ptimer_state *ptimer_init(QEMUBH *bh, uint8_t policy_mask)
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ptimer_tick, s);
     s->policy_mask = policy_mask;
     return s;
+}
+
+void ptimer_free(ptimer_state *s)
+{
+    qemu_bh_delete(s->bh);
+    timer_free(s->timer);
+    g_free(s);
 }

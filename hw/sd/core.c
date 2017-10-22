@@ -35,6 +35,43 @@ static SDState *get_card(SDBus *sdbus)
     return SD_CARD(kid->child);
 }
 
+uint8_t sdbus_get_dat_lines(SDBus *sdbus)
+{
+    SDState *card = get_card(sdbus);
+
+    if (card) {
+        SDCardClass *sc = SD_CARD_GET_CLASS(card);
+
+        return sc->get_dat_lines(card);
+    }
+
+    return 0;
+}
+
+bool sdbus_get_cmd_line(SDBus *sdbus)
+{
+    SDState *card = get_card(sdbus);
+
+    if (card) {
+        SDCardClass *sc = SD_CARD_GET_CLASS(card);
+
+        return sc->get_cmd_line(card);
+    }
+
+    return false;
+}
+
+void sdbus_set_voltage(SDBus *sdbus, int v)
+{
+    SDState *card = get_card(sdbus);
+
+    if (card) {
+        SDCardClass *sc = SD_CARD_GET_CLASS(card);
+
+        sc->set_voltage(card, v);
+    }
+}
+
 int sdbus_do_command(SDBus *sdbus, SDRequest *req, uint8_t *response)
 {
     SDState *card = get_card(sdbus);
@@ -129,6 +166,33 @@ void sdbus_set_readonly(SDBus *sdbus, bool readonly)
     if (sbc->set_readonly) {
         sbc->set_readonly(qbus->parent, readonly);
     }
+}
+
+void sdbus_reparent_card(SDBus *from, SDBus *to)
+{
+    SDState *card = get_card(from);
+    SDCardClass *sc;
+    bool readonly;
+
+    /* We directly reparent the card object rather than implementing this
+     * as a hotpluggable connection because we don't want to expose SD cards
+     * to users as being hotpluggable, and we can get away with it in this
+     * limited use case. This could perhaps be implemented more cleanly in
+     * future by adding support to the hotplug infrastructure for "device
+     * can be hotplugged only via code, not by user".
+     */
+
+    if (!card) {
+        return;
+    }
+
+    sc = SD_CARD_GET_CLASS(card);
+    readonly = sc->get_readonly(card);
+
+    sdbus_set_inserted(from, false);
+    qdev_set_parent_bus(DEVICE(card), &to->qbus);
+    sdbus_set_inserted(to, true);
+    sdbus_set_readonly(to, readonly);
 }
 
 static const TypeInfo sd_bus_info = {

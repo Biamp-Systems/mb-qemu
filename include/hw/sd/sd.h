@@ -51,9 +51,17 @@
 #define ERASE_RESET		(1 << 13)
 #define CURRENT_STATE		(7 << 9)
 #define READY_FOR_DATA		(1 << 8)
+#define SWTICH_ERROR        (1 << 7)
 #define APP_CMD			(1 << 5)
 #define AKE_SEQ_ERROR		(1 << 3)
 #define OCR_CCS_BITN        30
+
+#define EXCSD_BUS_WIDTH_OFFSET 183
+#define BUS_WIDTH_8_MASK    0x4
+#define BUS_WIDTH_4_MASK    0x2
+
+#define SD_TUNING_BLOCK_SIZE    64
+#define MMC_TUNING_BLOCK_SIZE   128
 
 typedef enum {
     sd_none = -1,
@@ -68,6 +76,9 @@ typedef struct {
     uint32_t arg;
     uint8_t crc;
 } SDRequest;
+
+#define SD_VOLTAGE_33 33
+#define SD_VOLTAGE_18 18
 
 typedef struct SDState SDState;
 typedef struct SDBus SDBus;
@@ -84,6 +95,9 @@ typedef struct {
     DeviceClass parent_class;
     /*< public >*/
 
+    uint8_t (*get_dat_lines)(SDState *sd);
+    bool (*get_cmd_line)(SDState *sd);
+    void (*set_voltage)(SDState *sd, int v);
     int (*do_command)(SDState *sd, SDRequest *req, uint8_t *response);
     void (*write_data)(SDState *sd, uint8_t value);
     uint8_t (*read_data)(SDState *sd);
@@ -116,6 +130,8 @@ typedef struct {
 
 /* Legacy functions to be used only by non-qdevified callers */
 SDState *sd_init(BlockBackend *bs, bool is_spi);
+SDState *mmc_init(BlockBackend *bs);
+
 int sd_do_command(SDState *sd, SDRequest *req,
                   uint8_t *response);
 void sd_write_data(SDState *sd, uint8_t value);
@@ -130,16 +146,33 @@ bool sd_data_ready(SDState *sd);
  * second slot is always empty).
  */
 void sd_enable(SDState *sd, bool enable);
+uint8_t sd_get_dat_lines(SDState *sd);
+bool sd_get_cmd_line(SDState *sd);
+void sd_set_voltage(SDState *sd, int v);
 
 /* Functions to be used by qdevified callers (working via
  * an SDBus rather than directly with SDState)
  */
+uint8_t sdbus_get_dat_lines(SDBus *sdbus);
+bool sdbus_get_cmd_line(SDBus *sdbus);
+void sdbus_set_voltage(SDBus *sdbus, int v);
 int sdbus_do_command(SDBus *sd, SDRequest *req, uint8_t *response);
 void sdbus_write_data(SDBus *sd, uint8_t value);
 uint8_t sdbus_read_data(SDBus *sd);
 bool sdbus_data_ready(SDBus *sd);
 bool sdbus_get_inserted(SDBus *sd);
 bool sdbus_get_readonly(SDBus *sd);
+/**
+ * sdbus_reparent_card: Reparent an SD card from one controller to another
+ * @from: controller bus to remove card from
+ * @to: controller bus to move card to
+ *
+ * Reparent an SD card, effectively unplugging it from one controller
+ * and inserting it into another. This is useful for SoCs like the
+ * bcm2835 which have two SD controllers and connect a single SD card
+ * to them, selected by the guest reprogramming GPIO line routing.
+ */
+void sdbus_reparent_card(SDBus *from, SDBus *to);
 
 /* Functions to be used by SD devices to report back to qdevified controllers */
 void sdbus_set_inserted(SDBus *sd, bool inserted);

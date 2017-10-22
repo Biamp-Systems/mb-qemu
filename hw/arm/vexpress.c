@@ -392,7 +392,6 @@ static void a15_daughterboard_init(const VexpressMachineState *vms,
     /* 0x2e000000: system SRAM */
     memory_region_init_ram(sram, NULL, "vexpress.a15sram", 0x10000,
                            &error_fatal);
-    vmstate_register_ram_global(sram);
     memory_region_add_subregion(sysmem, 0x2e000000, sram);
 
     /* 0x7ffb0000: DMA330 DMA controller: not modelled */
@@ -675,13 +674,11 @@ static void vexpress_common_init(MachineState *machine)
     sram_size = 0x2000000;
     memory_region_init_ram(sram, NULL, "vexpress.sram", sram_size,
                            &error_fatal);
-    vmstate_register_ram_global(sram);
     memory_region_add_subregion(sysmem, map[VE_SRAM], sram);
 
     vram_size = 0x800000;
     memory_region_init_ram(vram, NULL, "vexpress.vram", vram_size,
                            &error_fatal);
-    vmstate_register_ram_global(vram);
     memory_region_add_subregion(sysmem, map[VE_VIDEORAM], vram);
 
     /* 0x4e000000 LAN9118 Ethernet */
@@ -752,7 +749,6 @@ static void vexpress_class_init(ObjectClass *oc, void *data)
 
     mc->desc = "ARM Versatile Express";
     mc->init = vexpress_common_init;
-    mc->block_default_type = IF_SCSI;
     mc->max_cpus = 4;
 }
 

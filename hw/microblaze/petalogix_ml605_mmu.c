@@ -81,7 +81,16 @@ petalogix_ml605_init(MachineState *machine)
     int i;
     MemoryRegion *phys_lmb_bram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
+
+    MemoryRegion *cpu_mr = g_new(MemoryRegion, 1);
+    MemoryRegion *ddr_mr = g_new(MemoryRegion, 1);
+
     qemu_irq irq[32];
+
+    /* 32 bit system */
+    memory_region_init(cpu_mr, qdev_get_machine(), "cpu-mr", 1ull << 32);
+    memory_region_init(ddr_mr, qdev_get_machine(), "ddr-mr", 1ull << 32);
+    memory_region_add_subregion_overlap(cpu_mr, 0, ddr_mr, -1);
 
     /* init CPUs */
     cpu = MICROBLAZE_CPU(object_new(TYPE_MICROBLAZE_CPU));
@@ -98,12 +107,10 @@ petalogix_ml605_init(MachineState *machine)
     /* Attach emulated BRAM through the LMB.  */
     memory_region_init_ram(phys_lmb_bram, NULL, "petalogix_ml605.lmb_bram",
                            LMB_BRAM_SIZE, &error_fatal);
-    vmstate_register_ram_global(phys_lmb_bram);
     memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
 
     memory_region_init_ram(phys_ram, NULL, "petalogix_ml605.ram", ram_size,
                            &error_fatal);
-    vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, MEMORY_BASEADDR, phys_ram);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
@@ -120,8 +127,8 @@ petalogix_ml605_init(MachineState *machine)
     qdev_prop_set_uint32(dev, "kind-of-intr", 1 << TIMER_IRQ);
     qdev_init_nofail(dev);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, INTC_BASEADDR);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
-                       qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ));
+    qdev_connect_gpio_out_named(DEVICE(dev), "Outputs", 0,
+                                qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ));
     for (i = 0; i < 32; i++) {
         irq[i] = qdev_get_gpio_in(dev, i);
     }
@@ -142,6 +149,10 @@ petalogix_ml605_init(MachineState *machine)
     qemu_check_nic_model(&nd_table[0], "xlnx.axi-ethernet");
     eth0 = qdev_create(NULL, "xlnx.axi-ethernet");
     dma = qdev_create(NULL, "xlnx.axi-dma");
+
+    object_property_set_link(OBJECT(dma), OBJECT(ddr_mr), "sg", &error_abort);
+    object_property_set_link(OBJECT(dma), OBJECT(ddr_mr), "s2mm", &error_abort);
+    object_property_set_link(OBJECT(dma), OBJECT(ddr_mr), "mm2s", &error_abort);
 
     /* FIXME: attach to the sysbus instead */
     object_property_add_child(qdev_get_machine(), "xilinx-eth", OBJECT(eth0),
@@ -214,7 +225,7 @@ petalogix_ml605_init(MachineState *machine)
     microblaze_load_kernel(cpu, MEMORY_BASEADDR, ram_size,
                            machine->initrd_filename,
                            BINARY_DEVICE_TREE_FILE,
-                           NULL, NULL);
+                           0, NULL, NULL, 0);
 
 }
 

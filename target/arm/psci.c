@@ -127,7 +127,9 @@ void arm_handle_psci_call(ARMCPU *cpu)
                 break;
             }
             target_cpu = ARM_CPU(target_cpu_state);
-            ret = target_cpu->powered_off ? 1 : 0;
+
+            g_assert(qemu_mutex_iothread_locked());
+            ret = target_cpu->power_state;
             break;
         default:
             /* Everything above affinity level 0 is always on. */
@@ -135,7 +137,7 @@ void arm_handle_psci_call(ARMCPU *cpu)
         }
         break;
     case QEMU_PSCI_0_2_FN_SYSTEM_RESET:
-        qemu_system_reset_request();
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
         /* QEMU reset and shutdown are async requests, but PSCI
          * mandates that we never return from the reset/shutdown
          * call, so power the CPU off now so it doesn't execute
@@ -143,7 +145,7 @@ void arm_handle_psci_call(ARMCPU *cpu)
          */
         goto cpu_off;
     case QEMU_PSCI_0_2_FN_SYSTEM_OFF:
-        qemu_system_shutdown_request();
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
         goto cpu_off;
     case QEMU_PSCI_0_1_FN_CPU_ON:
     case QEMU_PSCI_0_2_FN_CPU_ON:

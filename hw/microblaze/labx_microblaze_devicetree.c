@@ -260,4 +260,4 @@ static void labx_microblaze_devicetree_machine_init(MachineClass *mc)
 
 DEFINE_MACHINE("labx-microblaze-devicetree", labx_microblaze_devicetree_machine_init)
 
-fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0, &endian);
+fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "compatible:cfi-flash", 0, &endian);

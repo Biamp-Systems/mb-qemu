@@ -58,6 +58,7 @@
 #define R_SPICR_TXFF_RST     (1 << 5)
 #define R_SPICR_RXFF_RST     (1 << 6)
 #define R_SPICR_MTI          (1 << 8)
+#define R_SPICR_MANUAL_SS_EN (1 << 7)
 
 #define R_SPISR     (0x64 / 4)
 #define SR_TX_FULL    (1 << 3)
@@ -155,6 +156,7 @@ static void xlx_spi_do_reset(XilinxSPI *s)
     s->regs[R_SPISSR] = ~0;
     xlx_spi_update_irq(s);
     xlx_spi_update_cs(s);
+    s->regs[R_SPICR] = R_SPICR_MTI | R_SPICR_MANUAL_SS_EN;
 }
 
 static void xlx_spi_reset(DeviceState *d)

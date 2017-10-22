@@ -26,6 +26,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/main-loop.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "qemu/host-utils.h"
@@ -381,7 +382,11 @@ void HELPER(waiti)(CPUXtensaState *env, uint32_t pc, uint32_t intlevel)
     env->pc = pc;
     env->sregs[PS] = (env->sregs[PS] & ~PS_INTLEVEL) |
         (intlevel << PS_INTLEVEL_SHIFT);
+
+    qemu_mutex_lock_iothread();
     check_interrupts(env);
+    qemu_mutex_unlock_iothread();
+
     if (env->pending_irq_level) {
         cpu_loop_exit(CPU(xtensa_env_get_cpu(env)));
         return;
@@ -426,7 +431,9 @@ void HELPER(update_ccompare)(CPUXtensaState *env, uint32_t i)
 
 void HELPER(check_interrupts)(CPUXtensaState *env)
 {
+    qemu_mutex_lock_iothread();
     check_interrupts(env);
+    qemu_mutex_unlock_iothread();
 }
 
 void HELPER(itlb_hit_test)(CPUXtensaState *env, uint32_t vaddr)
@@ -1018,11 +1025,11 @@ void HELPER(ule_s)(CPUXtensaState *env, uint32_t br, float32 a, float32 b)
 uint32_t HELPER(rer)(CPUXtensaState *env, uint32_t addr)
 {
     return address_space_ldl(env->address_space_er, addr,
-                             (MemTxAttrs){0}, NULL);
+                             MEMTXATTRS_UNSPECIFIED, NULL);
 }
 
 void HELPER(wer)(CPUXtensaState *env, uint32_t data, uint32_t addr)
 {
     address_space_stl(env->address_space_er, addr, data,
-                      (MemTxAttrs){0}, NULL);
+                      MEMTXATTRS_UNSPECIFIED, NULL);
 }

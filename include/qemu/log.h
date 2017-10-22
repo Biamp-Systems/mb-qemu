@@ -44,7 +44,16 @@ static inline bool qemu_log_separate(void)
 #define LOG_TRACE          (1 << 15)
 #define CPU_LOG_TB_OP_IND  (1 << 16)
 
+/* device entries */
+#define DEV_LOG_NET_DEV    (1 << 18)
+#define DEV_LOG_NAND       (1 << 19)
+#define DEV_LOG_NANDC      (1 << 20)
+#define DEV_LOG_SD         (1 << 21)
+#define DEV_LOG_SDHCI      (1 << 22)
+#define DEV_LOG_SPI        (1 << 23)
+#define DEV_LOG_SPI_DEV    (1 << 24)
 #define LOG_FDT            (1 << 25)
+#define LOG_PM             (1 << 26)
 
 /* Returns true if a bit is set in the current loglevel mask
  */

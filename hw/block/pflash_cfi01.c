@@ -753,9 +753,20 @@ static void pflash_cfi01_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    vmstate_register_ram(&pfl->mem, DEVICE(pfl));
     pfl->storage = memory_region_get_ram_ptr(&pfl->mem);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &pfl->mem);
+
+    if (pfl->blk) {
+        uint64_t perm;
+        pfl->ro = blk_is_read_only(pfl->blk);
+        perm = BLK_PERM_CONSISTENT_READ | (pfl->ro ? 0 : BLK_PERM_WRITE);
+        ret = blk_set_perm(pfl->blk, perm, BLK_PERM_ALL, errp);
+        if (ret < 0) {
+            return;
+        }
+    } else {
+        pfl->ro = 0;
+    }
 
     if (pfl->blk) {
         /* read the initial flash content */
@@ -766,12 +777,6 @@ static void pflash_cfi01_realize(DeviceState *dev, Error **errp)
             error_setg(errp, "failed to read the initial flash content");
             return;
         }
-    }
-
-    if (pfl->blk) {
-        pfl->ro = blk_is_read_only(pfl->blk);
-    } else {
-        pfl->ro = 0;
     }
 
     /* Default to devices being used at their maximum device width. This was

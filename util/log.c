@@ -183,13 +183,13 @@ void qemu_set_dfilter_ranges(const char *filter_spec, Error **errp)
             goto out;
         }
 
-        if (qemu_strtoull(r, &e, 0, &r1val)
+        if (qemu_strtou64(r, &e, 0, &r1val)
             || e != range_op) {
             error_setg(errp, "Invalid number to the left of %.*s",
                        (int)(r2 - range_op), range_op);
             goto out;
         }
-        if (qemu_strtoull(r2, NULL, 0, &r2val)) {
+        if (qemu_strtou64(r2, NULL, 0, &r2val)) {
             error_setg(errp, "Invalid number to the right of %.*s",
                        (int)(r2 - range_op), range_op);
             goto out;
@@ -272,7 +272,19 @@ const QEMULogItem qemu_log_items[] = {
     { CPU_LOG_TB_NOCHAIN, "nochain",
       "do not chain compiled TBs so that \"exec\" and \"cpu\" show\n"
       "complete traces" },
+
     { LOG_FDT, "fdt", "log Device Tree info." },
+    { LOG_PM,  "pm", "log Power Management info." },
+
+    /* device entries */
+    { DEV_LOG_NET_DEV, "net-dev", "enable Network Device logs." },
+    { DEV_LOG_NAND, "nand", "enable NAND log." },
+    { DEV_LOG_NANDC, "nandc", "enable NAND Controller log." },
+    { DEV_LOG_SD, "sd", "enable SD/MMC card log." },
+    { DEV_LOG_SDHCI, "sdhci", "enable SDHCI log." },
+    { DEV_LOG_SPI, "spi", "enable SPI controller log." },
+    { DEV_LOG_SPI_DEV, "spi-dev", "enable SPI device logs." },
+
     { 0, NULL, NULL },
 };
 

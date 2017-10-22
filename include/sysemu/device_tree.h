@@ -75,7 +75,7 @@ char *qemu_fdt_getprop_string(void *fdt, const char*node_path,
  *
  * returns a pointer to the property on success and NULL on failure
  */
-const void *qemu_fdt_getprop(void *fdt, const char *node_path,
+void *qemu_fdt_getprop(void *fdt, const char *node_path,
                              const char *property, int *lenp,
                              bool inherit, Error **errp);
 /**
@@ -225,6 +225,7 @@ char *qemu_fdt_get_child_by_name(void *fdt, char *parent_path,
  */
 int qemu_fdt_get_n_nodes_by_name(void *fdt, char ***array,
                                      const char *cmpname);
+
 /* misc */
 
 int fdt_get_num_nodes(void *fdt);

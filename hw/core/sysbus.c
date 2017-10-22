@@ -341,6 +341,36 @@ static bool sysbus_parse_reg(FDTGenericMMap *obj, FDTGenericRegPropInfo reg,
     return false;
 }
 
+static void sysbus_device_pwr_hlt_cntrl(void *opaque)
+{
+    DeviceState *dev = DEVICE(opaque);
+    SysBusDevice *s = SYS_BUS_DEVICE(opaque);
+    int i;
+
+    for (i = 0;; i++) {
+        MemoryRegion *mr = sysbus_mmio_get_region(s, i);
+        if (!mr) {
+            break;
+        }
+        memory_region_set_enabled(mr, dev->ps.active);
+    }
+}
+static void sysbus_device_pwr_cntrl(void *opaque, int n, int level)
+{
+    DeviceClass *dc_parent = DEVICE_CLASS(SYS_BUS_DEVICE_PARENT_CLASS);
+
+    dc_parent->pwr_cntrl(opaque, n, level);
+    sysbus_device_pwr_hlt_cntrl(opaque);
+}
+
+static void sysbus_device_hlt_cntrl(void *opaque, int n, int level)
+{
+    DeviceClass *dc_parent = DEVICE_CLASS(SYS_BUS_DEVICE_PARENT_CLASS);
+
+    dc_parent->hlt_cntrl(opaque, n, level);
+    sysbus_device_pwr_hlt_cntrl(opaque);
+}
+
 static void sysbus_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
@@ -348,7 +378,20 @@ static void sysbus_device_class_init(ObjectClass *klass, void *data)
 
     k->init = sysbus_device_init;
     k->bus_type = TYPE_SYSTEM_BUS;
+    k->pwr_cntrl = sysbus_device_pwr_cntrl;
+    k->hlt_cntrl = sysbus_device_hlt_cntrl;
     fmc->parse_reg = sysbus_parse_reg;
+    /*
+     * device_add plugs devices into a suitable bus.  For "real" buses,
+     * that actually connects the device.  For sysbus, the connections
+     * need to be made separately, and device_add can't do that.  The
+     * device would be left unconnected, and will probably not work
+     *
+     * However, a few machines can handle device_add/-device with
+     * a few specific sysbus devices. In those cases, the device
+     * subclass needs to override it and set user_creatable=true.
+     */
+    k->user_creatable = false;
 }
 
 static const TypeInfo sysbus_device_type_info = {

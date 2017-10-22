@@ -37,10 +37,11 @@
 #include "hw/boards.h"
 #include "hw/sysbus.h"
 #include "qapi-event.h"
+#include "hw/pm_debug.h"
 
-int qdev_hotplug = 0;
+bool qdev_hotplug = false;
 static bool qdev_hot_added = false;
-static bool qdev_hot_removed = false;
+bool qdev_hot_removed = false;
 
 const VMStateDescription *qdev_get_vmsd(DeviceState *dev)
 {
@@ -102,9 +103,23 @@ static void bus_add_child(BusState *bus, DeviceState *child)
 
 void qdev_set_parent_bus(DeviceState *dev, BusState *bus)
 {
+    bool replugging = dev->parent_bus != NULL;
+
+    if (replugging) {
+        /* Keep a reference to the device while it's not plugged into
+         * any bus, to avoid it potentially evaporating when it is
+         * dereffed in bus_remove_child().
+         */
+        object_ref(OBJECT(dev));
+        bus_remove_child(dev->parent_bus, dev);
+        object_unref(OBJECT(dev->parent_bus));
+    }
     dev->parent_bus = bus;
     object_ref(OBJECT(bus));
     bus_add_child(bus, dev);
+    if (replugging) {
+        object_unref(OBJECT(dev));
+    }
 }
 
 /* Create a new device.  This only initializes the device state
@@ -256,40 +271,6 @@ HotplugHandler *qdev_get_hotplug_handler(DeviceState *dev)
     return hotplug_ctrl;
 }
 
-void qdev_unplug(DeviceState *dev, Error **errp)
-{
-    DeviceClass *dc = DEVICE_GET_CLASS(dev);
-    HotplugHandler *hotplug_ctrl;
-    HotplugHandlerClass *hdc;
-
-    if (dev->parent_bus && !qbus_is_hotpluggable(dev->parent_bus)) {
-        error_setg(errp, QERR_BUS_NO_HOTPLUG, dev->parent_bus->name);
-        return;
-    }
-
-    if (!dc->hotpluggable) {
-        error_setg(errp, QERR_DEVICE_NO_HOTPLUG,
-                   object_get_typename(OBJECT(dev)));
-        return;
-    }
-
-    qdev_hot_removed = true;
-
-    hotplug_ctrl = qdev_get_hotplug_handler(dev);
-    /* hotpluggable device MUST have HotplugHandler, if it doesn't
-     * then something is very wrong with it */
-    g_assert(hotplug_ctrl);
-
-    /* If device supports async unplug just request it to be done,
-     * otherwise just remove it synchronously */
-    hdc = HOTPLUG_HANDLER_GET_CLASS(hotplug_ctrl);
-    if (hdc->unplug_request) {
-        hotplug_handler_unplug_request(hotplug_ctrl, dev, errp);
-    } else {
-        hotplug_handler_unplug(hotplug_ctrl, dev, errp);
-    }
-}
-
 static int qdev_reset_one(DeviceState *dev, void *opaque)
 {
     device_reset(dev);
@@ -370,7 +351,7 @@ void qdev_machine_creation_done(void)
      * ok, initial machine setup is done, starting from now we can
      * only create hotpluggable devices
      */
-    qdev_hotplug = 1;
+    qdev_hotplug = true;
 }
 
 bool qdev_machine_modified(void)
@@ -417,14 +398,18 @@ void qdev_init_gpio_in_named(DeviceState *dev, qemu_irq_handler handler,
     if (!name) {
         name = "unnamed-gpio-in";
     }
-    for (i = gpio_list->num_in; i < gpio_list->num_in + n; i++) {
-        gchar *propname = g_strdup_printf("%s[%u]", name, i);
 
+    /* Xilinx: For the FDT Generic GPIO magic we need this to be a wild card
+     * and not the usual numbered GPIOs.
+     */
+    gchar *propname = g_strdup_printf("%s[*]", name);
+
+    for (i = gpio_list->num_in; i < gpio_list->num_in + n; i++) {
         object_property_add_child(OBJECT(dev), propname,
                                   OBJECT(gpio_list->in[i]), &error_abort);
-        g_free(propname);
     }
 
+    g_free(propname);
     gpio_list->num_in += n;
 }
 
@@ -445,17 +430,20 @@ void qdev_init_gpio_out_named(DeviceState *dev, qemu_irq *pins,
         name = "unnamed-gpio-out";
     }
     memset(pins, 0, sizeof(*pins) * n);
-    for (i = 0; i < n; ++i) {
-        gchar *propname = g_strdup_printf("%s[%u]", name,
-                                          gpio_list->num_out + i);
 
+    /* Xilinx: For the FDT Generic GPIO magic we need this to be a wild card
+     * and not the usual numbered GPIOs.
+     */
+    gchar *propname = g_strdup_printf("%s[*]", name);
+
+    for (i = 0; i < n; ++i) {
         object_property_add_link(OBJECT(dev), propname, TYPE_IRQ,
                                  (Object **)&pins[i],
                                  object_property_allow_set_link,
                                  OBJ_PROP_LINK_UNREF_ON_RELEASE,
                                  &error_abort);
-        g_free(propname);
     }
+    g_free(propname);
     gpio_list->num_out += n;
 }
 
@@ -476,12 +464,40 @@ qemu_irq qdev_get_gpio_in(DeviceState *dev, int n)
     return qdev_get_gpio_in_named(dev, NULL, n);
 }
 
-void qdev_connect_gpio_out_named(DeviceState *dev, const char *name, int n,
-                                 qemu_irq pin)
+qemu_irq qdev_get_gpio_out_named(DeviceState *dev, const char *name, int n)
 {
     char *propname = g_strdup_printf("%s[%d]",
                                      name ? name : "unnamed-gpio-out", n);
-    if (pin) {
+    return (qemu_irq)object_property_get_link(OBJECT(dev), propname, NULL);
+}
+
+qemu_irq qdev_get_gpio_out(DeviceState *dev, int n)
+{
+    return qdev_get_gpio_out_named(dev, NULL, n);
+}
+
+void qdev_connect_gpio_out_named(DeviceState *dev, const char *name, int n,
+                                 qemu_irq pin)
+{
+    qemu_irq irq;
+    if (!pin) {
+        return;
+    }
+    char *propname = g_strdup_printf("%s[%d]",
+                                     name ? name : "unnamed-gpio-out", n);
+
+    irq = (qemu_irq)object_property_get_link(OBJECT(dev), propname, NULL);
+    if (irq) {
+        char *splitter_name;
+        irq = qemu_irq_split(irq, pin);
+        /* ugly, be a sure-fire way to get a unique name */
+        splitter_name = g_strdup_printf("%s-split-%p", propname, irq);
+        object_property_add_child(OBJECT(dev), splitter_name,OBJECT(irq),
+                                  &error_abort);
+    } else {
+        irq = pin;
+    }
+    if (irq) {
         /* We need a name for object_property_set_link to work.  If the
          * object has a parent, object_property_add_child will come back
          * with an error without doing anything.  If it has none, it will
@@ -491,7 +507,7 @@ void qdev_connect_gpio_out_named(DeviceState *dev, const char *name, int n,
                                                 "/unattached"),
                                   "non-qdev-gpio[*]", OBJECT(pin), NULL);
     }
-    object_property_set_link(OBJECT(dev), OBJECT(pin), propname, &error_abort);
+    object_property_set_link(OBJECT(dev), OBJECT(irq), propname, NULL);
     g_free(propname);
 }
 
@@ -536,11 +552,10 @@ void qdev_connect_gpio_out(DeviceState * dev, int n, qemu_irq pin)
     qdev_connect_gpio_out_named(dev, NULL, n, pin);
 }
 
-void qdev_pass_gpios(DeviceState *dev, DeviceState *container,
-                     const char *name)
+static void qdev_pass_ngl(DeviceState *dev, DeviceState *container,
+                     NamedGPIOList *ngl)
 {
     int i;
-    NamedGPIOList *ngl = qdev_get_named_gpio_list(dev, name);
 
     for (i = 0; i < ngl->num_in; i++) {
         const char *nm = ngl->name ? ngl->name : "unnamed-gpio-in";
@@ -563,6 +578,24 @@ void qdev_pass_gpios(DeviceState *dev, DeviceState *container,
     QLIST_REMOVE(ngl, node);
     QLIST_INSERT_HEAD(&container->gpios, ngl, node);
 }
+
+void qdev_pass_all_gpios(DeviceState *dev, DeviceState *container)
+{
+    NamedGPIOList *ngl, *next;
+
+    QLIST_FOREACH_SAFE(ngl, &dev->gpios, node, next) {
+        qdev_pass_ngl(dev, container, ngl);
+    }
+}
+
+void qdev_pass_gpios(DeviceState *dev, DeviceState *container,
+                     const char *name)
+{
+    NamedGPIOList *ngl = qdev_get_named_gpio_list(dev, name);
+
+    qdev_pass_ngl(dev, container, ngl);
+}
+
 
 BusState *qdev_get_child_bus(DeviceState *dev, const char *name)
 {
@@ -763,6 +796,10 @@ static void qdev_property_add_legacy(DeviceState *dev, Property *prop,
         return;
     }
 
+    if (prop->info->create) {
+        return;
+    }
+
     name = g_strdup_printf("legacy-%s", prop->name);
     object_property_add(OBJECT(dev), name, "str",
                         prop->info->print ? qdev_get_legacy_property : prop->info->get,
@@ -789,19 +826,22 @@ void qdev_property_add_static(DeviceState *dev, Property *prop,
     Error *local_err = NULL;
     Object *obj = OBJECT(dev);
 
-    /*
-     * TODO qdev_prop_ptr does not have getters or setters.  It must
-     * go now that it can be replaced with links.  The test should be
-     * removed along with it: all static properties are read/write.
-     */
-    if (!prop->info->get && !prop->info->set) {
-        return;
+    if (prop->info->create) {
+        prop->info->create(obj, prop, &local_err);
+    } else {
+        /*
+         * TODO qdev_prop_ptr does not have getters or setters.  It must
+         * go now that it can be replaced with links.  The test should be
+         * removed along with it: all static properties are read/write.
+         */
+        if (!prop->info->get && !prop->info->set) {
+            return;
+        }
+        object_property_add(obj, prop->name, prop->info->name,
+                            prop->info->get, prop->info->set,
+                            prop->info->release,
+                            prop, &local_err);
     }
-
-    object_property_add(obj, prop->name, prop->info->name,
-                        prop->info->get, prop->info->set,
-                        prop->info->release,
-                        prop, &local_err);
 
     if (local_err) {
         error_propagate(errp, local_err);
@@ -812,17 +852,8 @@ void qdev_property_add_static(DeviceState *dev, Property *prop,
                                     prop->info->description,
                                     &error_abort);
 
-    if (prop->qtype == QTYPE_NONE) {
-        return;
-    }
-
-    if (prop->qtype == QTYPE_QBOOL) {
-        object_property_set_bool(obj, prop->defval, prop->name, &error_abort);
-    } else if (prop->info->enum_table) {
-        object_property_set_str(obj, prop->info->enum_table[prop->defval],
-                                prop->name, &error_abort);
-    } else if (prop->qtype == QTYPE_QINT) {
-        object_property_set_int(obj, prop->defval, prop->name, &error_abort);
+    if (prop->set_default) {
+        prop->info->set_default_value(obj, prop);
     }
 }
 
@@ -879,6 +910,20 @@ static bool device_get_realized(Object *obj, Error **errp)
     return dev->realized;
 }
 
+static bool check_only_migratable(Object *obj, Error **err)
+{
+    DeviceClass *dc = DEVICE_GET_CLASS(obj);
+
+    if (!vmstate_check_only_migratable(dc->vmsd)) {
+        error_setg(err, "Device %s is not migratable, but "
+                   "--only-migratable was specified",
+                   object_get_typename(obj));
+        return false;
+    }
+
+    return true;
+}
+
 static void device_set_realized(Object *obj, bool value, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
@@ -895,6 +940,10 @@ static void device_set_realized(Object *obj, bool value, Error **errp)
     }
 
     if (value && !dev->realized) {
+        if (!check_only_migratable(obj, &local_err)) {
+            goto fail;
+        }
+
         if (!obj->parent) {
             gchar *name = g_strdup_printf("device[%d]", unattached_count++);
 
@@ -1015,16 +1064,10 @@ static bool device_get_hotplugged(Object *obj, Error **err)
     return dev->hotplugged;
 }
 
-static void device_set_hotplugged(Object *obj, bool value, Error **err)
-{
-    DeviceState *dev = DEVICE(obj);
-
-    dev->hotplugged = value;
-}
-
 static void device_initfn(Object *obj)
 {
     DeviceState *dev = DEVICE(obj);
+    DeviceClass *dc = DEVICE_GET_CLASS(obj);
     ObjectClass *class;
     Property *prop;
 
@@ -1041,7 +1084,7 @@ static void device_initfn(Object *obj)
     object_property_add_bool(obj, "hotpluggable",
                              device_get_hotpluggable, NULL, NULL);
     object_property_add_bool(obj, "hotplugged",
-                             device_get_hotplugged, device_set_hotplugged,
+                             device_get_hotplugged, NULL,
                              &error_abort);
 
     class = object_get_class(OBJECT(dev));
@@ -1056,6 +1099,13 @@ static void device_initfn(Object *obj)
     object_property_add_link(OBJECT(dev), "parent_bus", TYPE_BUS,
                              (Object **)&dev->parent_bus, NULL, 0,
                              &error_abort);
+
+    /* Power and retention control. */
+    qdev_init_gpio_in_named(dev, dc->pwr_cntrl, "pwr_cntrl", 1);
+    qdev_init_gpio_in_named(dev, dc->hlt_cntrl, "hlt_cntrl", 1);
+    /* Reset control. */
+    qdev_init_gpio_in_named(dev, dc->rst_cntrl, "rst_cntrl", 1);
+
     QLIST_INIT(&dev->gpios);
 }
 
@@ -1122,6 +1172,52 @@ static void device_unparent(Object *obj)
     dev->opts = NULL;
 }
 
+static Property device_props[] = {
+    DEFINE_PROP_STRING("device-id", DeviceState, id),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void device_pwr_hlt_cntrl(void *opaque, const char *from)
+{
+    const char *to;
+    DeviceState *dev = DEVICE(opaque);
+
+    dev->ps.active = dev->ps.power && !dev->ps.halt;
+    to = PM_STATE(dev);
+
+    if (from != to) {
+        PM_DEBUG_PRINT("%s: from %s to %s\n", dev->id, from, to);
+    }
+}
+
+static void device_pwr_cntrl(void *opaque, int n, int level)
+{
+    DeviceState *dev = DEVICE(opaque);
+    const char *from = PM_STATE(dev);
+
+    dev->ps.power = level;
+
+    device_pwr_hlt_cntrl(opaque, from);
+}
+
+static void device_hlt_cntrl(void *opaque, int n, int level)
+{
+    DeviceState *dev = DEVICE(opaque);
+    const char *from = PM_STATE(dev);
+
+    dev->ps.halt = level;
+
+    device_pwr_hlt_cntrl(opaque, from);
+}
+
+/* Default rst_cntrl callback for all devices. */
+static void device_rst_cntrl(void *opaque, int n, int level)
+{
+    DeviceState *dev = DEVICE(opaque);
+
+    device_reset(dev);
+}
+
 static void device_class_init(ObjectClass *class, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(class);
@@ -1129,6 +1225,7 @@ static void device_class_init(ObjectClass *class, void *data)
     class->unparent = device_unparent;
     dc->realize = device_realize;
     dc->unrealize = device_unrealize;
+    dc->props = device_props;
 
     /* by default all devices were considered as hotpluggable,
      * so with intent to check it in generic qdev_unplug() /
@@ -1137,6 +1234,14 @@ static void device_class_init(ObjectClass *class, void *data)
      * should override it in their class_init()
      */
     dc->hotpluggable = true;
+
+    /* power state callbacks */
+    dc->pwr_cntrl = device_pwr_cntrl;
+    dc->hlt_cntrl = device_hlt_cntrl;
+    /* reset control callback */
+    dc->rst_cntrl = device_rst_cntrl;
+
+    dc->user_creatable = true;
 }
 
 void device_reset(DeviceState *dev)
@@ -1145,6 +1250,24 @@ void device_reset(DeviceState *dev)
 
     if (klass->reset) {
         klass->reset(dev);
+    }
+}
+
+void device_halt(DeviceState *dev)
+{
+    DeviceClass *klass = DEVICE_GET_CLASS(dev);
+
+    if (klass->halt) {
+        klass->halt(dev);
+    }
+}
+
+void device_unhalt(DeviceState *dev)
+{
+    DeviceClass *klass = DEVICE_GET_CLASS(dev);
+
+    if (klass->halt) {
+        klass->unhalt(dev);
     }
 }
 

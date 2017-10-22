@@ -30,6 +30,9 @@
 #define TARGET_LONG_BITS 32
 #endif
 
+/* The x86 has a strong memory model with some store-after-load re-ordering */
+#define TCG_GUEST_DEFAULT_MO      (TCG_MO_ALL & ~TCG_MO_ST_LD)
+
 /* Maximum instruction code size */
 #define TARGET_MAX_INSN_SIZE 16
 
@@ -49,7 +52,9 @@
 
 #include "exec/cpu-defs.h"
 
+#ifdef CONFIG_TCG
 #include "fpu/softfloat.h"
+#endif
 
 #define R_EAX 0
 #define R_ECX 1
@@ -694,6 +699,7 @@ typedef uint32_t FeatureWordArray[FEATURE_WORDS];
 
 #define EXCP_SYSCALL    0x100 /* only happens in user only emulation
                                  for syscall instruction */
+#define EXCP_VMEXIT     0x100
 
 /* i386-specific interrupt pending bits.  */
 #define CPU_INTERRUPT_POLL      CPU_INTERRUPT_TGT_EXT_1
@@ -1143,6 +1149,8 @@ typedef struct CPUX86State {
     uint32_t cpuid_vendor3;
     uint32_t cpuid_version;
     FeatureWordArray features;
+    /* Features that were explicitly enabled/disabled */
+    FeatureWordArray user_features;
     uint32_t cpuid_model[12];
 
     /* MTRRs */
@@ -1210,8 +1218,9 @@ struct X86CPU {
     bool check_cpuid;
     bool enforce_cpuid;
     bool expose_kvm;
+    bool expose_tcg;
     bool migratable;
-    bool host_features;
+    bool max_features; /* Enable all supported features automatically */
     uint32_t apic_id;
 
     /* Enables publishing of TSC increment and Local APIC bus frequencies to
@@ -1255,6 +1264,9 @@ struct X86CPU {
     /* if true override the phys_bits value with a value read from the host */
     bool host_phys_bits;
 
+    /* Stop SMI delivery for migration compatibility with old machines */
+    bool kvm_no_smi_migration;
+
     /* Number of physical address bits supported */
     uint32_t phys_bits;
 
@@ -1266,6 +1278,7 @@ struct X86CPU {
 
     struct kvm_msrs *kvm_msr_buf;
 
+    int32_t node_id; /* NUMA node this CPU belongs to */
     int32_t socket_id;
     int32_t core_id;
     int32_t thread_id;
@@ -1408,8 +1421,6 @@ int cpu_x86_get_descr_debug(CPUX86State *env, unsigned int selector,
 
 /* op_helper.c */
 /* used for debug or cpu save/restore */
-void cpu_get_fp80(uint64_t *pmant, uint16_t *pexp, floatx80 f);
-floatx80 cpu_set_fp80(uint64_t mant, uint16_t upper);
 
 /* cpu-exec.c */
 /* the following helpers are only usable in user mode simulation as
@@ -1417,6 +1428,8 @@ floatx80 cpu_set_fp80(uint64_t mant, uint16_t upper);
 void cpu_x86_load_seg(CPUX86State *s, int seg_reg, int selector);
 void cpu_x86_fsave(CPUX86State *s, target_ulong ptr, int data32);
 void cpu_x86_frstor(CPUX86State *s, target_ulong ptr, int data32);
+void cpu_x86_fxsave(CPUX86State *s, target_ulong ptr);
+void cpu_x86_fxrstor(CPUX86State *s, target_ulong ptr);
 
 /* you can call this signal handler from your SIGBUS and SIGSEGV
    signal handlers to inform the virtual CPU of exceptions. non zero
@@ -1431,6 +1444,7 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
 void cpu_clear_apic_feature(CPUX86State *env);
 void host_cpuid(uint32_t function, uint32_t count,
                 uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
+void host_vendor_fms(char *vendor, int *family, int *model, int *stepping);
 
 /* helper.c */
 int x86_cpu_handle_mmu_fault(CPUState *cpu, vaddr addr,
@@ -1438,6 +1452,16 @@ int x86_cpu_handle_mmu_fault(CPUState *cpu, vaddr addr,
 void x86_cpu_set_a20(X86CPU *cpu, int a20_state);
 
 #ifndef CONFIG_USER_ONLY
+static inline int x86_asidx_from_attrs(CPUState *cs, MemTxAttrs attrs)
+{
+    return !!attrs.secure;
+}
+
+static inline AddressSpace *cpu_addressspace(CPUState *cs, MemTxAttrs attrs)
+{
+    return cpu_get_address_space(cs, cpu_asidx_from_attrs(cs, attrs));
+}
+
 uint8_t x86_ldub_phys(CPUState *cs, hwaddr addr);
 uint32_t x86_lduw_phys(CPUState *cs, hwaddr addr);
 uint32_t x86_ldl_phys(CPUState *cs, hwaddr addr);
@@ -1573,11 +1597,14 @@ void QEMU_NORETURN raise_interrupt(CPUX86State *nenv, int intno, int is_int,
 /* cc_helper.c */
 extern const uint8_t parity_table[256];
 uint32_t cpu_cc_compute_all(CPUX86State *env1, int op);
-void update_fp_status(CPUX86State *env);
 
 static inline uint32_t cpu_compute_eflags(CPUX86State *env)
 {
-    return env->eflags | cpu_cc_compute_all(env, CC_OP) | (env->df & DF_MASK);
+    uint32_t eflags = env->eflags;
+    if (tcg_enabled()) {
+        eflags |= cpu_cc_compute_all(env, CC_OP) | (env->df & DF_MASK);
+    }
+    return eflags;
 }
 
 /* NOTE: the translator must set DisasContext.cc_op to CC_OP_EFLAGS
@@ -1612,9 +1639,34 @@ static inline MemTxAttrs cpu_get_mem_attrs(CPUX86State *env)
     return ((MemTxAttrs) { .secure = (env->hflags & HF_SMM_MASK) != 0 });
 }
 
+static inline int32_t x86_get_a20_mask(CPUX86State *env)
+{
+    if (env->hflags & HF_SMM_MASK) {
+        return -1;
+    } else {
+        return env->a20_mask;
+    }
+}
+
 /* fpu_helper.c */
-void cpu_set_mxcsr(CPUX86State *env, uint32_t val);
-void cpu_set_fpuc(CPUX86State *env, uint16_t val);
+void update_fp_status(CPUX86State *env);
+void update_mxcsr_status(CPUX86State *env);
+
+static inline void cpu_set_mxcsr(CPUX86State *env, uint32_t mxcsr)
+{
+    env->mxcsr = mxcsr;
+    if (tcg_enabled()) {
+        update_mxcsr_status(env);
+    }
+}
+
+static inline void cpu_set_fpuc(CPUX86State *env, uint16_t fpuc)
+{
+     env->fpuc = fpuc;
+     if (tcg_enabled()) {
+        update_fp_status(env);
+     }
+}
 
 /* mem_helper.c */
 void helper_lock_init(void);
@@ -1624,13 +1676,13 @@ void cpu_svm_check_intercept_param(CPUX86State *env1, uint32_t type,
                                    uint64_t param, uintptr_t retaddr);
 void cpu_vmexit(CPUX86State *nenv, uint32_t exit_code, uint64_t exit_info_1,
                 uintptr_t retaddr);
+void do_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1);
 
 /* seg_helper.c */
 void do_interrupt_x86_hardirq(CPUX86State *env, int intno, int is_hw);
 
 /* smm_helper.c */
 void do_smm_enter(X86CPU *cpu);
-void cpu_smm_update(X86CPU *cpu);
 
 /* apic.c */
 void cpu_report_tpr_access(CPUX86State *env, TPRAccess access);
@@ -1665,4 +1717,6 @@ void x86_cpu_dump_local_apic_state(CPUState *cs, FILE *f,
 /* cpu.c */
 bool cpu_is_bsp(X86CPU *cpu);
 
+void x86_cpu_xrstor_all_areas(X86CPU *cpu, const X86XSaveArea *buf);
+void x86_cpu_xsave_all_areas(X86CPU *cpu, X86XSaveArea *buf);
 #endif /* I386_CPU_H */

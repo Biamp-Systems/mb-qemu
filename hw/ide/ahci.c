@@ -28,11 +28,12 @@
 #include "hw/pci/pci.h"
 
 #include "qemu/error-report.h"
+#include "qapi/error.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/dma.h"
 #include "hw/ide/internal.h"
 #include "hw/ide/pci.h"
-#include "hw/ide/ahci.h"
+#include "hw/ide/ahci_internal.h"
 
 #define DEBUG_AHCI 0
 
@@ -1485,6 +1486,18 @@ void ahci_realize(AHCIState *s, DeviceState *qdev, AddressSpace *as, int ports)
 
 void ahci_uninit(AHCIState *s)
 {
+    int i, j;
+
+    for (i = 0; i < s->ports; i++) {
+        AHCIDevice *ad = &s->dev[i];
+
+        for (j = 0; j < 2; j++) {
+            IDEState *s = &ad->port.ifs[j];
+
+            ide_exit(s);
+        }
+    }
+
     g_free(s->dev);
 }
 
@@ -1657,7 +1670,7 @@ const VMStateDescription vmstate_ahci = {
         VMSTATE_UINT32(control_regs.impl, AHCIState),
         VMSTATE_UINT32(control_regs.version, AHCIState),
         VMSTATE_UINT32(idp_index, AHCIState),
-        VMSTATE_INT32_EQUAL(ports, AHCIState),
+        VMSTATE_INT32_EQUAL(ports, AHCIState, NULL),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -1686,6 +1699,12 @@ static void sysbus_ahci_init(Object *obj)
 
     sysbus_init_mmio(sbd, &s->ahci.mem);
     sysbus_init_irq(sbd, &s->ahci.irq);
+
+    object_property_add_link(obj, "dma", TYPE_MEMORY_REGION,
+                             (Object **)&s->ahci.dma_mr,
+                             qdev_prop_allow_set_link_before_realize,
+                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             &error_abort);
 }
 
 static void sysbus_ahci_realize(DeviceState *dev, Error **errp)
@@ -1693,6 +1712,10 @@ static void sysbus_ahci_realize(DeviceState *dev, Error **errp)
     SysbusAHCIState *s = SYSBUS_AHCI(dev);
 
     ahci_realize(&s->ahci, dev, &address_space_memory, s->num_ports);
+
+    s->ahci.as = s->ahci.dma_mr ?
+                 address_space_init_shareable(s->ahci.dma_mr, NULL) :
+                 &address_space_memory;
 }
 
 static Property sysbus_ahci_properties[] = {
@@ -1820,6 +1843,14 @@ static void sysbus_ahci_register_types(void)
 }
 
 type_init(sysbus_ahci_register_types)
+
+int32_t ahci_get_num_ports(PCIDevice *dev)
+{
+    AHCIPCIState *d = ICH_AHCI(dev);
+    AHCIState *ahci = &d->ahci;
+
+    return ahci->ports;
+}
 
 void ahci_ide_create_devs(PCIDevice *dev, DriveInfo **hd)
 {

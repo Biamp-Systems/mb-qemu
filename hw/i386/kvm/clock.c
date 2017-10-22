@@ -19,9 +19,11 @@
 #include "qemu/host-utils.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
+#include "sysemu/hw_accel.h"
 #include "kvm_i386.h"
 #include "hw/sysbus.h"
 #include "hw/kvm/clock.h"
+#include "qapi/error.h"
 
 #include <linux/kvm.h>
 #include <linux/kvm_para.h>
@@ -67,6 +69,8 @@ static uint64_t kvmclock_current_nsec(KVMClockState *s)
     uint64_t nsec_lo;
     uint64_t nsec_hi;
     uint64_t nsec;
+
+    cpu_synchronize_state(cpu);
 
     if (!(env->system_time_msr & 1ULL)) {
         /* KVM clock not active */
@@ -207,6 +211,11 @@ static void kvmclock_vm_state_change(void *opaque, int running,
 static void kvmclock_realize(DeviceState *dev, Error **errp)
 {
     KVMClockState *s = KVM_CLOCK(dev);
+
+    if (!kvm_enabled()) {
+        error_setg(errp, "kvmclock device requires KVM");
+        return;
+    }
 
     kvm_update_clock(s);
 

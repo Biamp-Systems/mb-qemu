@@ -20,7 +20,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "sysemu/char.h"
+#include "chardev/char-fe.h"
 #include "hw/char/serial.h"
 #include "qapi/error.h"
 
@@ -186,7 +186,7 @@ static void altera_uart_realize(DeviceState *dev, Error **errp)
     }
 
     qemu_chr_fe_set_handlers(&s->chr, uart_can_rx, uart_rx,
-                             uart_event, s, NULL, true);
+                             uart_event, NULL, s, NULL, true);
 }
 
 static void altera_uart_init(Object *obj)

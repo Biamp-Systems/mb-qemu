@@ -78,12 +78,10 @@ petalogix_s3adsp1800_init(MachineState *machine)
     memory_region_init_ram(phys_lmb_bram, NULL,
                            "petalogix_s3adsp1800.lmb_bram", LMB_BRAM_SIZE,
                            &error_fatal);
-    vmstate_register_ram_global(phys_lmb_bram);
     memory_region_add_subregion(sysmem, 0x00000000, phys_lmb_bram);
 
     memory_region_init_ram(phys_ram, NULL, "petalogix_s3adsp1800.ram",
                            ram_size, &error_fatal);
-    vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(sysmem, ddr_base, phys_ram);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
@@ -101,8 +99,8 @@ petalogix_s3adsp1800_init(MachineState *machine)
                          1 << ETHLITE_IRQ | 1 << UARTLITE_IRQ);
     qdev_init_nofail(dev);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, INTC_BASEADDR);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
-                       qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ));
+    qdev_connect_gpio_out_named(DEVICE(dev), "Outputs", 0,
+                                qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ));
     for (i = 0; i < 32; i++) {
         irq[i] = qdev_get_gpio_in(dev, i);
     }
@@ -130,7 +128,7 @@ petalogix_s3adsp1800_init(MachineState *machine)
     microblaze_load_kernel(cpu, ddr_base, ram_size,
                            machine->initrd_filename,
                            BINARY_DEVICE_TREE_FILE,
-                           NULL, NULL);
+                           0, NULL, NULL, 0);
 }
 
 static void petalogix_s3adsp1800_machine_init(MachineClass *mc)

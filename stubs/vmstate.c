@@ -19,3 +19,8 @@ void vmstate_unregister(DeviceState *dev,
                         void *opaque)
 {
 }
+
+bool vmstate_check_only_migratable(const VMStateDescription *vmsd)
+{
+    return true;
+}

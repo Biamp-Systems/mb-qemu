@@ -51,7 +51,7 @@
 
 static int endian; /* Always little endian */
 
-static int sopc_device_probe(FDTMachineInfo *fdti, const char *node_path, int pass, uint32_t offset);
+static int sopc_device_probe(FDTMachineInfo *fdti, char *node_path, int pass, uint32_t offset);
 
 static struct {
     uint32_t bootstrap_pc;
@@ -118,7 +118,7 @@ static ram_addr_t get_dram_base(void *fdt)
     return qemu_fdt_getprop_cell(fdt, "/memory", "reg", NULL, 0, 0, &errp);
 }
 
-typedef void (*device_init_func_t)(FDTMachineInfo *fdti, const char *node_path, uint32_t offset);
+typedef void (*device_init_func_t)(FDTMachineInfo *fdti, char *node_path, uint32_t offset);
 
 typedef struct DevInfo {
     device_init_func_t probe;
@@ -131,19 +131,13 @@ typedef struct DevInfo {
  * Interrupt controller device
  */
 
-static Nios2CPU *cpu0 = NULL;
-
-static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offset)
+static void cpu_probe(FDTMachineInfo *fdti, char *node_path, uint32_t offset)
 {
     Error *errp = NULL;
 
     Nios2CPU *cpu = cpu_nios2_init("nios2");
 
     qemu_register_reset(main_cpu_reset, cpu);
-
-    if (!cpu0) {
-        cpu0 = cpu;
-    }
 
 #if 0 /* TODO: Finish off the vectored-interrupt-controller */
     int reglen;
@@ -163,7 +157,9 @@ static void cpu_probe(FDTMachineInfo *fdti, const char *node_path, uint32_t offs
 #else
     /* Internal interrupt controller (IIC) */
     nios2_iic_create(cpu);
-    fdti->irq_base = qdev_get_gpio_in(cpu->env.pic_state, 0);
+    static qemu_irq irq;
+    irq = qdev_get_gpio_in(cpu->env.pic_state, 0); 
+    fdti->irq_base = &irq;
 #endif
 
     /* TODO: use the entrypoint of the passed in elf file or
@@ -205,7 +201,7 @@ DevInfo *devices[] = {
     NULL
 };
 
-static int sopc_device_probe(FDTMachineInfo *fdti, const char *node_path, int pass, uint32_t offset)
+static int sopc_device_probe(FDTMachineInfo *fdti, char *node_path, int pass, uint32_t offset)
 {
     DevInfo **dev = &(devices[0]);
 
@@ -262,23 +258,32 @@ static void labx_nios2_init(MachineState *machine)
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram_alias = g_new(MemoryRegion, 1);
 
+    //add_to_compat_table(NULL, "compatible:simple-bus", NULL);
+#if 0
+    if (!qemu_fdt_getprop(fdt, "/memory", "compatible", NULL, 0, NULL)) {
+        qemu_fdt_setprop_string(fdt, "/memory", "compatible",
+                                "qemu:memory-region");
+        qemu_fdt_setprop_cells(fdt, "/memory", "qemu,ram", 1);
+    }
+#else
     if (ddr_base != 0)
     {
         /* Attach emulated BRAM through the LMB. LMB size is not specified
            in the device-tree but there must be one to hold the vector table
            if the ram doesn't cover that address. */
         memory_region_init_ram(phys_lmb_bram, NULL, "nios2.lmb_bram", LMB_BRAM_SIZE, &error_fatal);
-        vmstate_register_ram_global(phys_lmb_bram);
+        //vmstate_register_ram_global(phys_lmb_bram);
         memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
     }
 
     memory_region_init_ram(phys_ram, NULL, "nios2.ram", ram_size, &error_fatal);
     memory_region_init_alias(phys_ram_alias, NULL, "nios2.ram.alias",
                              phys_ram, 0, ram_size);
-    vmstate_register_ram_global(phys_ram);
+    //vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base + 0xc0000000,
                                 phys_ram_alias);
+#endif
 
     /* Create cpus listed in the device-tree */
     add_to_force_table(cpus_probe, "cpu-probe", NULL);
@@ -286,7 +291,7 @@ static void labx_nios2_init(MachineState *machine)
     /* Create other devices listed in the device-tree */
     fdt_init_destroy_fdti(fdt_generic_create_machine(fdt, NULL));
 
-    nios2_load_kernel(cpu0, ddr_base, ram_size, machine->initrd_filename,
+    nios2_load_kernel(NIOS2_CPU(first_cpu), ddr_base, ram_size, machine->initrd_filename,
                       BINARY_DEVICE_TREE_FILE, NULL);
 }
 
@@ -299,4 +304,4 @@ static void labx_nios2_devicetree_machine_init(MachineClass *mc)
 
 DEFINE_MACHINE("labx-nios2-devicetree", labx_nios2_devicetree_machine_init)
 
-fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "cfi-flash", 0, &endian);
+fdt_register_compatibility_opaque(pflash_cfi01_fdt_init, "compatible:cfi-flash", 0, &endian);

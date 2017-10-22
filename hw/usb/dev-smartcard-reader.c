@@ -813,7 +813,10 @@ static void ccid_write_data_block(USBCCIDState *s, uint8_t slot, uint8_t seq,
     if (p->b.bError) {
         DPRINTF(s, D_VERBOSE, "error %d\n", p->b.bError);
     }
-    memcpy(p->abData, data, len);
+    if (len) {
+        g_assert_nonnull(data);
+        memcpy(p->abData, data, len);
+    }
     ccid_reset_error_status(s);
     usb_wakeup(s->bulk, 0);
 }
@@ -1163,7 +1166,7 @@ static void ccid_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void ccid_handle_destroy(USBDevice *dev)
+static void ccid_unrealize(USBDevice *dev, Error **errp)
 {
     USBCCIDState *s = USB_CCID_DEV(dev);
 
@@ -1311,12 +1314,12 @@ static int ccid_card_init(DeviceState *qdev)
     int ret = 0;
 
     if (card->slot != 0) {
-        error_report("Warning: usb-ccid supports one slot, can't add %d",
-                card->slot);
+        warn_report("usb-ccid supports one slot, can't add %d",
+                    card->slot);
         return -1;
     }
     if (s->card != NULL) {
-        error_report("Warning: usb-ccid card already full, not adding");
+        warn_report("usb-ccid card already full, not adding");
         return -1;
     }
     ret = ccid_card_initfn(card);
@@ -1470,7 +1473,7 @@ static void ccid_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = ccid_handle_reset;
     uc->handle_control = ccid_handle_control;
     uc->handle_data    = ccid_handle_data;
-    uc->handle_destroy = ccid_handle_destroy;
+    uc->unrealize      = ccid_unrealize;
     dc->desc = "CCID Rev 1.1 smartcard reader";
     dc->vmsd = &ccid_vmstate;
     dc->props = ccid_properties;
