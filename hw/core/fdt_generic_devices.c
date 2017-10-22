@@ -199,7 +199,6 @@ fdt_register_instance_n(i2c_bus_fdt_init, "i2c@6", 6);
 fdt_register_instance_n(i2c_bus_fdt_init, "i2c@7", 7);
 
 static const TypeInfo fdt_qom_aliases [] = {
-#if 0
     {   .name = "xlnx.ps7-ethernet",        .parent = "cadence_gem"         },
     {   .name = "cdns,gem",                 .parent = "cadence_gem"         },
     {   .name = "cdns,zynq-gem",            .parent = "cadence_gem"         },
@@ -225,7 +224,6 @@ static const TypeInfo fdt_qom_aliases [] = {
     {   .name = "cdns.spi-r1p6",            .parent = "xlnx.ps7-spi"        },
     {   .name = "xlnx,eth-dma",             .parent = "xlnx.axi-dma"        },
     {   .name = "xilinx_spi",               .parent = "m25p80"        },
-#endif
 };
 
 static void fdt_generic_register_types(void)

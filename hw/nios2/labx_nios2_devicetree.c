@@ -258,7 +258,7 @@ static void labx_nios2_init(MachineState *machine)
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram_alias = g_new(MemoryRegion, 1);
 
-    //add_to_compat_table(NULL, "compatible:simple-bus", NULL);
+    add_to_compat_table(NULL, "compatible:simple-bus", NULL);
 #if 0
     if (!qemu_fdt_getprop(fdt, "/memory", "compatible", NULL, 0, NULL)) {
         qemu_fdt_setprop_string(fdt, "/memory", "compatible",
