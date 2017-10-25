@@ -159,34 +159,28 @@ static void labx_microblaze_init(MachineState *machine)
     hwaddr ddr_base = get_dram_base(fdt);
     MemoryRegion *phys_lmb_bram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
-    MicroBlazeCPU *cpu;
-    CPUMBState *env;
 
+    add_to_compat_table(NULL, "compatible:simple-bus", NULL);
 
     /* init CPUs */
     if (machine->cpu_model == NULL) {
         machine->cpu_model = "microblaze";
     }
-    cpu = cpu_mb_init(machine->cpu_model);
-    env = &cpu->env;
-
-    env->pvr.regs[10] = 0x0c000000; /* spartan 3a dsp family.  */
-    qemu_register_reset(main_cpu_reset, cpu);
 
     /* Attach emulated BRAM through the LMB. LMB size is not specified in the
        device-tree but there must be one to hold the vector table. */
     memory_region_init_ram(phys_lmb_bram, NULL, "labx_microblaze.lmb_bram",
                            LMB_BRAM_SIZE, &error_fatal);
-    vmstate_register_ram_global(phys_lmb_bram);
     memory_region_add_subregion(address_space_mem, 0x00000000, phys_lmb_bram);
 
     memory_region_init_ram(phys_ram, NULL, "labx_microblaze.ram", ram_size, &error_fatal);
-    vmstate_register_ram_global(phys_ram);
     memory_region_add_subregion(address_space_mem, ddr_base, phys_ram);
 
     /* Create other devices listed in the device-tree */
-    fdt_init_destroy_fdti(fdt_generic_create_machine(fdt,
-                            qdev_get_gpio_in(DEVICE(cpu), MB_CPU_IRQ)));
+    fdt_init_destroy_fdti(fdt_generic_create_machine(fdt, NULL));
+
+    /* Register reset now that the CPU has been created */
+    qemu_register_reset(main_cpu_reset, first_cpu);
 
     if (machine->kernel_filename) {
         uint64_t entry, low, high;
