@@ -3287,7 +3287,7 @@ static inline void cpu_physical_memory_write_rom_internal(AddressSpace *as,
                 l = memory_region_size(mr) - addr1;
 	    }
 
-            addr1 += memory_region_get_ram_addr(mr);
+            // CRW - The address should not contain the host offset... //addr1 += memory_region_get_ram_addr(mr);
             /* ROM/RAM case */
             ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
             switch (type) {
