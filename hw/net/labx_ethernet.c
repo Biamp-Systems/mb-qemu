@@ -572,7 +572,7 @@ static int labx_ethernet_init(SysBusDevice *dev)
     sysbus_init_mmio(dev, &p->mmio_mac);
     sysbus_init_mmio(dev, &p->mmio_fifo);
 
-    sysbus_mmio_map(dev, 0, p->baseAddress);
+    /* Offset 0 is automatically mapped. Map the other regions */
     sysbus_mmio_map(dev, 1, p->baseAddress + (1 << (10+2)));
     sysbus_mmio_map(dev, 2, p->baseAddress + (2 << (10+2)));
 

@@ -260,7 +260,7 @@ static int labx_ptp_init(SysBusDevice *dev)
     sysbus_init_mmio(dev, &p->mmio_tx);
     sysbus_init_mmio(dev, &p->mmio_rx);
 
-    sysbus_mmio_map(dev, 0, p->baseAddress);
+    /* Offset 0 is automatically mapped. Map the other regions */
     sysbus_mmio_map(dev, 1, p->baseAddress + (1 << min_bits(PTP_RAM_BYTES-1)));
     sysbus_mmio_map(dev, 2, p->baseAddress + (2 << min_bits(PTP_RAM_BYTES-1)));
 

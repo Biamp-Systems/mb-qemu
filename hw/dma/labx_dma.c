@@ -211,7 +211,7 @@ static int labx_dma_init(SysBusDevice *dev)
     sysbus_init_mmio(dev, &p->mmio_dma);
     sysbus_init_mmio(dev, &p->mmio_microcode);
 
-    sysbus_mmio_map(dev, 0, p->baseAddress);
+    /* Offset 0 is automatically mapped. Map the other regions */
     sysbus_mmio_map(dev, 1, p->baseAddress +
                             (1 << (min_bits(p->microcodeWords-1)+2)));
 

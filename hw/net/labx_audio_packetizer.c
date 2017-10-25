@@ -346,7 +346,7 @@ static int labx_audio_packetizer_init(SysBusDevice *dev)
     sysbus_init_mmio(dev, &p->mmio_template);
     sysbus_init_mmio(dev, &p->mmio_microcode);
 
-    sysbus_mmio_map(dev, 0, p->baseAddress);
+    /* Offset 0 is automatically mapped. Map the other regions */
     sysbus_mmio_map(dev, 1, p->baseAddress +
                             (1 << (min_bits(p->microcodeWords-1)+2)));
     sysbus_mmio_map(dev, 2, p->baseAddress +

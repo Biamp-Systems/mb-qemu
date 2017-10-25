@@ -141,13 +141,12 @@ static int labx_redundancy_switch_init(SysBusDevice *dev)
 
     sysbus_init_mmio(dev, &p->mmio_switch_regs);
 
-    sysbus_mmio_map(dev, 0, p->baseAddress);
+    /* Offset 0 is automatically mapped. */
 
     return 0;
 }
 
 static Property labx_redundancy_switch_properties[] = {
-    DEFINE_PROP_UINT32("reg", LabXRedundancySwitch, baseAddress, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -169,7 +168,7 @@ static const TypeInfo labx_redundancy_switch_info = {
 
 static const TypeInfo labx_redundancy_switch_info2 = {
     .name          = "xlnx.labx-redundancy-switch",
-    .parent        = TYPE_SYS_BUS_DEVICE,
+    .parent        = TYPE_LABX_REDUNDANCY_SWITCH,
     .instance_size = sizeof(LabXRedundancySwitch),
     .class_init    = labx_redundancy_switch_class_init,
 };
