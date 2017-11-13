@@ -54,6 +54,7 @@ struct xlx_pic
     /* Configuration reg chosen at synthesis-time. QEMU populates
        the bits at board-setup.  */
     uint32_t c_kind_of_intr;
+    uint32_t interrupt_parent;
 
     /* Runtime control registers.  */
     uint32_t regs[R_MAX];
@@ -165,12 +166,22 @@ static void irq_handler(void *opaque, int irq, int level)
     update_irq(p);
 }
 
+static void xilinx_intc_realize(DeviceState *dev, Error **errp)
+{
+    struct xlx_pic *p = XILINX_INTC(dev);
+    fprintf(stderr, "Interrupt parent %d\n", p->interrupt_parent);
+    if (p->interrupt_parent) {
+      sysbus_init_irq(SYS_BUS_DEVICE(dev), &p->parent_irq);
+    } else {
+      qdev_init_gpio_out_named(DEVICE(dev), &p->parent_irq, "Outputs", 1);
+    }
+}
+
 static void xilinx_intc_init(Object *obj)
 {
     struct xlx_pic *p = XILINX_INTC(obj);
 
     qdev_init_gpio_in(DEVICE(obj), irq_handler, 32);
-    qdev_init_gpio_out_named(DEVICE(obj), &p->parent_irq, "Outputs", 1);
 
     memory_region_init_io(&p->mmio, obj, &pic_ops, p, "xlnx.xps-intc",
                           R_MAX * 4);
@@ -199,8 +210,8 @@ static int xilinx_intc_fdt_get_irq(FDTGenericIntc *obj, qemu_irq *irqs,
         return 0;
     }
 
-    exp_type = p->c_kind_of_intr & (1 << idx) ? 0 : 2;
-    if (cells[1] != exp_type) {
+    exp_type = (p->c_kind_of_intr & (1 << idx)) ? 0 : 2;
+    if ((cells[1] & 0x2) != exp_type) {
         error_setg(errp, "Xilinx Intc expects interrupt mode %" PRIx32
                    " for interrupt %" PRIx32 ", mode %" PRIx32 " given",
                    exp_type, idx, cells[1]);
@@ -213,13 +224,17 @@ static int xilinx_intc_fdt_get_irq(FDTGenericIntc *obj, qemu_irq *irqs,
 
 static Property xilinx_intc_properties[] = {
     DEFINE_PROP_UINT32("kind-of-intr", struct xlx_pic, c_kind_of_intr, 0),
+    DEFINE_PROP_UINT32("interrupt-parent", struct xlx_pic, interrupt_parent, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 
 static void xilinx_intc_fdt_auto_parent(FDTGenericIntc *obj, Error **errp)
 {
-    qdev_connect_gpio_out_named(DEVICE(obj), "Outputs", 0,
-                                qdev_get_gpio_in(DEVICE(first_cpu), 0));
+    struct xlx_pic *p = XILINX_INTC(obj);
+    if (!p->interrupt_parent) {
+        qdev_connect_gpio_out_named(DEVICE(obj), "Outputs", 0,
+                                    qdev_get_gpio_in(DEVICE(first_cpu), 0));
+    }
 }
 
 
@@ -229,6 +244,7 @@ static void xilinx_intc_class_init(ObjectClass *klass, void *data)
     FDTGenericIntcClass *fgic = FDT_GENERIC_INTC_CLASS(klass);
 
     dc->props = xilinx_intc_properties;
+    dc->realize = xilinx_intc_realize;
     fgic->get_irq = xilinx_intc_fdt_get_irq;
     fgic->auto_parent = xilinx_intc_fdt_auto_parent;
 }
