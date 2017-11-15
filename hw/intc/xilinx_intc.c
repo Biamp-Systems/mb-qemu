@@ -169,7 +169,6 @@ static void irq_handler(void *opaque, int irq, int level)
 static void xilinx_intc_realize(DeviceState *dev, Error **errp)
 {
     struct xlx_pic *p = XILINX_INTC(dev);
-    fprintf(stderr, "Interrupt parent %d\n", p->interrupt_parent);
     if (p->interrupt_parent) {
       sysbus_init_irq(SYS_BUS_DEVICE(dev), &p->parent_irq);
     } else {
