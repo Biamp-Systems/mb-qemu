@@ -217,7 +217,7 @@ static const TypeInfo fdt_qom_aliases [] = {
 #endif
     {   .name = "xlnx.zynq-qspi",           .parent = "xlnx.ps7-qspi"       },
     {   .name = "xlnx.xuartps",             .parent = "cadence_uart"        },
-    {   .name = "simple-bus",               .parent = "qemu:memory-region"  },
+    {   .name = "simple-bus",               .parent = TYPE_BUS  },
     {   .name = "xlnx,axi-dpdma-1.0",       .parent = "xlnx.dpdma"          },
     {   .name = "xlnx,xps-gpio-1.00.a",     .parent = "xlnx.axi-gpio"       },
     {   .name = "arasan,sdhci-8.9a",        .parent = "xilinx.zynqmp-sdhci" },

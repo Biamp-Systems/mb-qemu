@@ -160,8 +160,6 @@ static void labx_microblaze_init(MachineState *machine)
     MemoryRegion *phys_lmb_bram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
 
-    add_to_compat_table(NULL, "compatible:simple-bus", NULL);
-
     /* init CPUs */
     if (machine->cpu_model == NULL) {
         machine->cpu_model = "microblaze";
