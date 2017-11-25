@@ -28,6 +28,7 @@
 #include <libfdt.h>
 #include "hw/fdt_generic_util.h"
 #include "hw/fdt_generic_devices.h"
+#include "monitor/qdev.h"
 
 #ifndef ARM_GENERIC_FDT_DEBUG
 #define ARM_GENERIC_FDT_DEBUG 3
@@ -100,12 +101,17 @@ static int zynq7000_mdio_phy_connect(char *node_path, FDTMachineInfo *fdti,
 {
     Object *parent;
     char parent_node_path[DT_PATH_LENGTH];
+    DeviceState *dev;
+
+    dev = qdev_create(NULL, "mdio");
+    qdev_init_nofail(dev);
 
     /* Register MDIO obj instance to fdti, useful during child registration */
-    fdt_init_set_opaque(fdti, node_path, Opaque);
+    fdt_init_set_opaque(fdti, node_path, dev);
     if (qemu_fdt_getparent(fdti->fdt, parent_node_path, node_path)) {
         abort();
     }
+    qdev_set_id(dev, qemu_fdt_get_node_name(fdti->fdt, parent_node_path));
 
     /* Wait for the parent to be created */
     while (!fdt_init_has_opaque(fdti, parent_node_path)) {
@@ -116,11 +122,11 @@ static int zynq7000_mdio_phy_connect(char *node_path, FDTMachineInfo *fdti,
     parent = fdt_init_get_opaque(fdti, parent_node_path);
 
     /* Add parent to mdio node */
-    object_property_add_child(OBJECT(parent), "mdio_child", OBJECT(Opaque),
+    object_property_add_child(OBJECT(parent), "mdio_child", OBJECT(dev),
                               NULL);
 
     /* Set mdio property of gem device */
-    object_property_set_link(OBJECT(parent), OBJECT(Opaque), "mdio", NULL);
+    object_property_set_link(OBJECT(parent), OBJECT(dev), "mdio", NULL);
     return 0;
 }
 
@@ -185,7 +191,7 @@ static char *zynq7000_qspi_flash_node_clone(void *fdt)
                                               "xlnx,zynq-qspi-1.0");
     if (ret == 0) {
         int qspi_is_dual = qemu_fdt_getprop_cell(fdt, qspi_node_path,
-                                                 "is-dual", 0, NULL,
+                                                 "is-dual", NULL, 0,
 						 false, NULL);
         /* Set bus-cells property to 1 */
         val[0] = cpu_to_be32(1);
@@ -581,10 +587,8 @@ static void arm_generic_fdt_7000_init(MachineState *machine)
     /* Mark the simple-bus as incompatible as it breaks the Zynq boot */
     add_to_compat_table(NULL, "compatible:simple-bus", NULL);
 
-    dev = qdev_create(NULL, "mdio");
-    qdev_init_nofail(dev);
     /* Add MDIO Connect Call back */
-    add_to_inst_bind_table(zynq7000_mdio_phy_connect, "mdio", dev);
+    add_to_inst_bind_table(zynq7000_mdio_phy_connect, "mdio", NULL);
     add_to_compat_table(zynq7000_mdio_phy_create, "device_type:ethernet-phy",
                         dev);
 
