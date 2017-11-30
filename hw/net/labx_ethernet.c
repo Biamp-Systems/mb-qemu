@@ -617,10 +617,17 @@ static const TypeInfo labx_ethernet_info2 = {
     .instance_size = sizeof(LabXEthernet),
 };
 
+static const TypeInfo labx_ethernet_info3 = {
+    .name          = "biamp,ethernet-1.04a",
+    .parent        = TYPE_LABX_ETHERNET,
+    .instance_size = sizeof(LabXEthernet),
+};
+
 static void labx_ethernet_register(void)
 {
     type_register_static(&labx_ethernet_info);
     type_register_static(&labx_ethernet_info2);
+    type_register_static(&labx_ethernet_info3);
 }
 
 type_init(labx_ethernet_register)
