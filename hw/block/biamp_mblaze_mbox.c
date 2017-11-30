@@ -95,6 +95,7 @@ static void message_ready_irq(void *opaque, int irq, int level){
  */
 static void host_to_mbox(void *opaque, const uint8_t *buf, int size){
     BiampMbMbox *p = opaque;
+    int i;
 
     size = size % (MBLAZE_MBOX_BYTES + 1);
     if(p->mailboxIndex == 0){
@@ -110,7 +111,7 @@ static void host_to_mbox(void *opaque, const uint8_t *buf, int size){
         }
     }
     else{
-        for(int i = p->mailboxIndex; i <= size + p->mailboxIndex && i < MBLAZE_MBOX_BYTES; i++){
+        for(i = p->mailboxIndex; i <= size + p->mailboxIndex && i < MBLAZE_MBOX_BYTES; i++){
             ((uint8_t*)(p->mailboxBuffer))[i-1] = buf[i];
         }
         p->mailboxIndex += size;

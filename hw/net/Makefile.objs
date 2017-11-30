@@ -33,6 +33,7 @@ common-obj-$(CONFIG_LABX) += labx_audio_depacketizer.o
 common-obj-$(CONFIG_LABX) += labx_ethernet.o
 common-obj-$(CONFIG_LABX) += labx_ptp.o
 common-obj-$(CONFIG_LABX) += labx_redundancy_switch.o
+common-obj-$(CONFIG_LABX) += biamp_video_depacketizer.o
 
 obj-$(CONFIG_ETRAXFS) += etraxfs_eth.o
 obj-$(CONFIG_COLDFIRE) += mcf_fec.o

@@ -877,6 +877,12 @@ hwaddr fdt_get_parent_base(const char *node_path,
     char parent[DT_PATH_LENGTH];
     if (!qemu_fdt_getparent(fdti->fdt, parent, node_path)) {
         do {
+            while (!fdt_init_has_opaque(fdti, parent)) {
+               fdt_init_yield(fdti);
+            }
+            if (!object_dynamic_cast(fdt_init_get_opaque(fdti, parent), TYPE_BUS)) {
+                break;
+            }
             Error *errp = NULL;
             int64_t parent_base = 0;
             parent_base = qemu_fdt_getprop_cell(fdti->fdt, parent, "reg",
