@@ -97,27 +97,28 @@ static void host_to_mbox(void *opaque, const uint8_t *buf, int size){
     BiampMbMbox *p = opaque;
     int i;
 
-    size = size % (MBLAZE_MBOX_BYTES + 1);
-    if(p->mailboxIndex == 0){
-        switch((mblaze_opcode)buf[0]){
-        case(EVENT_READY) :
-            qemu_irq_raise(p->eventRdyIrq);
-            break;
-        case(WRITE_BUFFER):
-            p->mailboxIndex = 1;
-            break;
-        default:
-            break;
+    for(i = 0; i < size; i++){
+        if(p->mailboxIndex == 0){
+            switch((mblaze_opcode)buf[i]){
+            case(EVENT_READY):
+                qemu_irq_raise(p->eventRdyIrq);
+                break;
+            case(WRITE_BUFFER):
+                p->mailboxIndex = 1;
+                break;
+            default:
+                break;
+            }
         }
-    }
-    else{
-        for(i = p->mailboxIndex; i <= size + p->mailboxIndex && i < MBLAZE_MBOX_BYTES; i++){
-            ((uint8_t*)(p->mailboxBuffer))[i-1] = buf[i];
-        }
-        p->mailboxIndex += size;
-        if(p->mailboxIndex > MBLAZE_MBOX_BYTES){
-            qemu_irq_raise(p->responseRdyIrq);
-            p->mailboxIndex = 0;
+        else{
+            ((uint8_t*)(p->mailboxBuffer))[p->mailboxIndex - 1] = buf[i];
+            if(p->mailboxIndex < MBLAZE_MBOX_BYTES){
+                p->mailboxIndex++;
+            }
+            else{
+                p->mailboxIndex = 0;
+                qemu_irq_raise(p->responseRdyIrq);
+            }
         }
     }
 }
