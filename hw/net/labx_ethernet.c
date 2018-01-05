@@ -220,6 +220,10 @@ static uint64_t mac_regs_read(void *opaque, hwaddr addr,
     case 0x05: /* host mdio config */
         break;
 
+    case 0x00000504: /* MII Management Config 1 */
+        retval=1;
+        break;
+
     default:
         printf("labx-ethernet: Read of unknown mac register %"HWADDR_PRIX"\n", addr);
         break;

@@ -52,7 +52,6 @@ static int video_processor_init(SysBusDevice *dev)
 }
 
 static Property video_processor_properties[] = {
-    //DEFINE_PROP_CHR("chardev0", BiampMbMbox, chr_fifo),
     DEFINE_PROP_END_OF_LIST(),
 };
 
