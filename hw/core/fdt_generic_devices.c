@@ -224,6 +224,7 @@ static const TypeInfo fdt_qom_aliases [] = {
     {   .name = "cdns.spi-r1p6",            .parent = "xlnx.ps7-spi"        },
     {   .name = "xlnx,eth-dma",             .parent = "xlnx.axi-dma"        },
     {   .name = "xilinx_spi",               .parent = "m25p80"        },
+    {   .name = "xlnx,ten-gig-eth-mac-15.0", .parent = "xlnx.axi-ethernet"  },
 };
 
 static void fdt_generic_register_types(void)
