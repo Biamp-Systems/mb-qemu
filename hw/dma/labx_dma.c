@@ -87,7 +87,8 @@ static uint64_t dma_regs_read(void *opaque, hwaddr addr,
             break;
 
         case 0x7E: /* capabilities */
-            retval = ((p->hasStatusFifo              & 0x01) << 16) |
+            retval = (((p->numChannels >> 2)         & 0x03) << 21) |
+                     ((p->hasStatusFifo              & 0x01) << 16) |
                      ((p->numIndexRegs               & 0x0F) << 12) |
                      ((p->numChannels                & 0x03) << 10) |
                      ((p->numAlus                    & 0x03) << 8) |
