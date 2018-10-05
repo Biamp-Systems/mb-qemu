@@ -47,6 +47,9 @@ static uint64_t buffer_clear_regs_read(void *opaque, hwaddr addr,
     uint32_t retval = 0;
 
     switch ((addr>>2) & 0xFF) {
+			case 0:
+			case 1:
+			case 2:
 			case 3: retval = 1; break;
 
     default:
@@ -64,6 +67,11 @@ static void buffer_clear_regs_write(void *opaque, hwaddr addr,
     uint32_t value = val64;
 
     switch ((addr>>2) & 0xFF) {
+
+			case 0:
+			case 1:
+			case 2:
+			case 3: break; 
 
     default:
         fprintf(stderr,"biamp-buffer-clear: Write of unknown register "
