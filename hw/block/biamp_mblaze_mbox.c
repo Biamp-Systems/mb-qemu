@@ -97,6 +97,7 @@ static void host_to_mbox(void *opaque, const uint8_t *buf, int size){
     BiampMbMbox *p = opaque;
     int i;
 
+
     for(i = 0; i < size; i++){
         if(p->mailboxIndex == 0){
             switch((mblaze_opcode)buf[i]){
@@ -134,6 +135,7 @@ static void chr_fifo_event(void *opaque, int event){
 
 static int biamp_mblaze_mbox_init(SysBusDevice *dev)
 {
+
     BiampMbMbox *p = BIAMP_MBMBOX(dev);
     
     /* Initialize the mailbox buffer */
@@ -151,7 +153,8 @@ static int biamp_mblaze_mbox_init(SysBusDevice *dev)
 
     /* Initialize the chardev front ends */
     p->mailboxIndex = 0;
-    qemu_chr_fe_init(&(p->chr_fifo), qemu_chr_find("mbmbx") , &error_abort);
+    if (qemu_chr_fe_init(&(p->chr_fifo), qemu_chr_find("mbmbx") , &error_abort) == false) {
+		}
     qemu_chr_fe_set_handlers(&(p->chr_fifo), mb_can_rx, host_to_mbox, chr_fifo_event, NULL, p, NULL, true);
 
     return 0;

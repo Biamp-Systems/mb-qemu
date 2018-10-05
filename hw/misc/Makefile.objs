@@ -46,6 +46,8 @@ common-obj-$(CONFIG_XILINX_AXI) += stream-fifo.o
 
 common-obj-$(CONFIG_EDU) += edu.o
 
+common-obj-$(CONFIG_LABX) += biamp_buffer_clear.o
+
 common-obj-y += unimp.o
 
 obj-$(CONFIG_VMPORT) += vmport.o
