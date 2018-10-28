@@ -266,6 +266,7 @@ void gic_update(GICState *s)
         best_irq = 1023;
         for (irq = 0; irq < s->num_irq; irq++) {
             if (GIC_TEST_ENABLED(irq, cm) && gic_test_pending(s, irq, cm) &&
+                (!GIC_TEST_ACTIVE(irq, cm)) &&
                 (irq < GIC_INTERNAL || GIC_TARGET(irq) & cm)) {
                 if (GIC_GET_PRIORITY(irq, cpu) < best_prio &&
                     !is_apr(s, cpu, GIC_GET_PRIORITY(irq, cpu))) {
@@ -1659,11 +1660,10 @@ static void arm_gic_class_init(ObjectClass *klass, void *data)
     LinuxDeviceClass *ldc = LINUX_DEVICE_CLASS(klass);
 
     agc->irq_handler = gic_set_irq;
-    agc->parent_realize = dc->realize;
-    dc->realize = arm_gic_realize;
     fgic->auto_parent = arm_gic_fdt_auto_parent;
     fggc->client_gpios = arm_gic_client_gpios;
     ldc->linux_init = arm_gic_linux_init;
+    device_class_set_parent_realize(dc, arm_gic_realize, &agc->parent_realize);
 }
 
 static const TypeInfo arm_gic_info = {

@@ -43,7 +43,7 @@
         fprintf(stderr,  ": %s: ", __func__); \
         fprintf(stderr, ## __VA_ARGS__); \
     } \
-} while (0);
+} while (0)
 
 /* config register */
 #define R_CONFIG            (0x00 / 4)
@@ -188,6 +188,13 @@
 #define R_GQSPI_MOD_ID        (0x1fc / 4)
 #define R_GQSPI_MOD_ID_RESET  (0x10a0000)
 
+#define R_QSPIDMA_DST_CTRL         (0x80c / 4)
+#define R_QSPIDMA_DST_CTRL_RESET   (0x803ffa00)
+#define R_QSPIDMA_DST_I_MASK       (0x820 / 4)
+#define R_QSPIDMA_DST_I_MASK_RESET (0xfe)
+#define R_QSPIDMA_DST_CTRL2        (0x824 / 4)
+#define R_QSPIDMA_DST_CTRL2_RESET  (0x081bfff8)
+
 /* size of TXRX FIFOs */
 #define RXFF_A          (128)
 #define TXFF_A          (128)
@@ -203,6 +210,9 @@
 #define SNOOP_ADDR 0xF0
 #define SNOOP_NONE 0xEE
 #define SNOOP_STRIPING 0
+
+#define MIN_NUM_BUSSES 1
+#define MAX_NUM_BUSSES 2
 
 static inline int num_effective_busses(XilinxSPIPS *s)
 {
@@ -400,6 +410,9 @@ static void xlnx_zynqmp_qspips_reset(DeviceState *d)
     s->regs[R_GQSPI_GPIO] = 1;
     s->regs[R_GQSPI_LPBK_DLY_ADJ] = R_GQSPI_LPBK_DLY_ADJ_RESET;
     s->regs[R_GQSPI_MOD_ID] = R_GQSPI_MOD_ID_RESET;
+    s->regs[R_QSPIDMA_DST_CTRL] = R_QSPIDMA_DST_CTRL_RESET;
+    s->regs[R_QSPIDMA_DST_I_MASK] = R_QSPIDMA_DST_I_MASK_RESET;
+    s->regs[R_QSPIDMA_DST_CTRL2] = R_QSPIDMA_DST_CTRL2_RESET;
     s->man_start_com_g = false;
     s->gqspi_irqline = 0;
     xlnx_zynqmp_qspips_update_ixr(s);
@@ -597,7 +610,7 @@ static void xilinx_spips_flush_txfifo(XilinxSPIPS *s)
     for (;;) {
         int i;
         uint8_t tx = 0;
-        uint8_t tx_rx[num_effective_busses(s)];
+        uint8_t tx_rx[MAX_NUM_BUSSES] = { 0 };
         uint8_t dummy_cycles = 0;
         uint8_t addr_length;
 
@@ -1127,6 +1140,9 @@ static void xlnx_zynqmp_qspips_write(void *opaque, hwaddr addr,
         xlnx_zynqmp_qspips_update_cs_lines(s);
         xlnx_zynqmp_qspips_update_ixr(s);
     }
+    if (s->regs[R_CMND] & R_CMND_RXFIFO_DRAIN) {
+        fifo8_reset(&s->rx_fifo_g);
+    }
     xlnx_zynqmp_qspips_notify(s);
 }
 
@@ -1270,6 +1286,19 @@ static void xilinx_spips_realize(DeviceState *dev, Error **errp)
     int i;
 
     DB_PRINT_L(0, "realized spips\n");
+
+    if (s->num_busses > MAX_NUM_BUSSES) {
+        error_setg(errp,
+                   "requested number of SPI busses %u exceeds maximum %d",
+                   s->num_busses, MAX_NUM_BUSSES);
+        return;
+    }
+    if (s->num_busses < MIN_NUM_BUSSES) {
+        error_setg(errp,
+                   "requested number of SPI busses %u is below minimum %d",
+                   s->num_busses, MIN_NUM_BUSSES);
+        return;
+    }
 
     s->spi = g_new(SSIBus *, s->num_busses);
     for (i = 0; i < s->num_busses; ++i) {

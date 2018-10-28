@@ -44,6 +44,7 @@ static int video_processor_init(SysBusDevice *dev)
                                      "video_processor",
                                      4096,
                                      true,
+				     false,
                                      "./files/VideoProcessorBlob.bin",
                                      NULL);
     sysbus_init_mmio(dev, &p->memRegion);

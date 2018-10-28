@@ -810,10 +810,10 @@ static void axipcie_main_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(sbd, &s->irq_msi[0]);
     sysbus_init_irq(sbd, &s->irq_msi[1]);
 
-    pci->bus = pci_register_bus(dev, "pcie.0", axipcie_set_irq,
-                                pci_swizzle_map_irq_fn, s, &s->io_mmio,
-                                &s->io_ioport, PCI_DEVFN(0, 0), 4,
-                                TYPE_PCIE_BUS);
+    pci->bus = pci_register_root_bus(dev, "pcie.0", axipcie_set_irq,
+                                     pci_swizzle_map_irq_fn, s, &s->io_mmio,
+                                     &s->io_ioport, PCI_DEVFN(0, 0), 4,
+                                     TYPE_PCIE_BUS);
 
     memory_region_init_iommu(&s->iommu_attr, sizeof(s->iommu_attr), 
                              TYPE_XILINX_AXIPCIE_MAIN_IOMMU_MEMORY_REGION,

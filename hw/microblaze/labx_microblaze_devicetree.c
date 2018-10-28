@@ -36,6 +36,7 @@
 #include "exec/address-spaces.h"
 #include "qemu/config-file.h"
 #include "qapi/error.h"
+#include "qemu/option.h"
 
 #include "hw/fdt_generic.h"
 #include "hw/fdt_generic_devices.h"
@@ -159,11 +160,6 @@ static void labx_microblaze_init(MachineState *machine)
     hwaddr ddr_base = get_dram_base(fdt);
     MemoryRegion *phys_lmb_bram = g_new(MemoryRegion, 1);
     MemoryRegion *phys_ram = g_new(MemoryRegion, 1);
-
-    /* init CPUs */
-    if (machine->cpu_model == NULL) {
-        machine->cpu_model = "microblaze";
-    }
 
     /* Attach emulated BRAM through the LMB. LMB size is not specified in the
        device-tree but there must be one to hold the vector table. */

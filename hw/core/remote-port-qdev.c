@@ -12,13 +12,15 @@
 #include "hw/sysbus.h"
 #include "monitor/monitor.h"
 #include "monitor/qdev.h"
-#include "qmp-commands.h"
+#include "qapi/error.h"
+#include "qapi/qapi-commands-misc.h"
 #include "sysemu/arch_init.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/config-file.h"
 #include "qemu/error-report.h"
 #include "qemu/help_option.h"
 #include "qemu/cutils.h"
+#include "qemu/option.h"
 
 #include "hw/remote-port.h"
 

@@ -11,13 +11,6 @@
 #include "hw/i2c/i2c.h"
 #include "hw/fdt_generic_util.h"
 
-typedef struct I2CNode I2CNode;
-
-struct I2CNode {
-    I2CSlave *elt;
-    QLIST_ENTRY(I2CNode) next;
-};
-
 #define I2C_BROADCAST 0x00
 
 static Property i2c_props[] = {
@@ -25,9 +18,6 @@ static Property i2c_props[] = {
     DEFINE_PROP_UINT8("address-range", struct I2CSlave, address_range, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
-
-#define TYPE_I2C_BUS "i2c-bus"
-#define I2C_BUS(obj) OBJECT_CHECK(I2CBus, (obj), TYPE_I2C_BUS)
 
 static const TypeInfo i2c_bus_info = {
     .name = TYPE_I2C_BUS,

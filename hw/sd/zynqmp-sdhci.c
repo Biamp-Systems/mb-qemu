@@ -82,12 +82,11 @@ static void zynqmp_sdhci_slottype_handler(void *opaque, int n, int level)
 static void zynqmp_sdhci_reset(DeviceState *dev)
 {
     ZynqMPSDHCIState *s = ZYNQMP_SDHCI(dev);
-    SDHCIState *ss = SYSBUS_SDHCI(dev);
     DeviceClass *dc_parent = DEVICE_CLASS(ZYNQMP_SDHCI_PARENT_CLASS);
 
     dc_parent->reset(dev);
 
-    sd_set_cb(s->card, ss->ro_cb, ss->eject_cb);
+    sd_set_cb(s->card, NULL, NULL);
 }
 
 static void zynqmp_sdhci_realize(DeviceState *dev, Error **errp)

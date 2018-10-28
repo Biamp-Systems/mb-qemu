@@ -23,6 +23,7 @@
 #include "qom/cpu.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
+#include "qemu/option.h"
 
 #ifdef CONFIG_FDT
 #include "qemu/config-file.h"
@@ -37,7 +38,7 @@
             fprintf(stderr,  ": %s: ", __func__); \
             fprintf(stderr, ## __VA_ARGS__); \
         } \
-    } while (0);
+    } while (0)
 
 #define XILINX_LOCK_KEY 0x767b
 #define XILINX_UNLOCK_KEY 0xdf0d

@@ -402,9 +402,8 @@ static void arm_gicv3_class_init(ObjectClass *klass, void *data)
     FDTGenericGPIOClass *fggc = FDT_GENERIC_GPIO_CLASS(klass);
 
     agcc->post_load = arm_gicv3_post_load;
-    agc->parent_realize = dc->realize;
-    dc->realize = arm_gic_realize;
     fggc->client_gpios = arm_gicv3_client_gpios;
+    device_class_set_parent_realize(dc, arm_gic_realize, &agc->parent_realize);
 }
 
 static const TypeInfo arm_gicv3_info = {

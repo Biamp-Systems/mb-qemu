@@ -207,19 +207,34 @@ static void rtc_init(Object *obj)
     qemu_get_timedate(&s->current_tm, 0);
     s->tick_offset = mktimegm(&s->current_tm) -
         qemu_clock_get_ns(rtc_clock) / NANOSECONDS_PER_SECOND;
+
+
+    trace_xlnx_zynqmp_rtc_gettime(s->current_tm.tm_year, s->current_tm.tm_mon,
+                                  s->current_tm.tm_mday, s->current_tm.tm_hour,
+                                  s->current_tm.tm_min, s->current_tm.tm_sec);
+}
+
+static int rtc_pre_save(void *opaque)
+{
+    XlnxZynqMPRTC *s = opaque;
+    int64_t now = qemu_clock_get_ns(rtc_clock) / NANOSECONDS_PER_SECOND;
+
+    /* Add the time at migration */
+    s->tick_offset = s->tick_offset + now;
+
+    return 0;
 }
 
 static int rtc_post_load(void *opaque, int version_id)
 {
     XlnxZynqMPRTC *s = opaque;
+    int64_t now = qemu_clock_get_ns(rtc_clock) / NANOSECONDS_PER_SECOND;
 
-    /* The tick_offset is added to the current time to determine the guest
-     * time. After migration we don't want to use the original time as that
-     * will indicate to the guest that time has passed, so we need to
-     * recalculate the tick_offset here.
+    /* Subtract the time after migration. This combined with the pre_save
+     * action results in us having subtracted the time that the guest was
+     * stopped to the offset.
      */
-    s->tick_offset = mktimegm(&s->current_tm) -
-        qemu_clock_get_ns(rtc_clock) / NANOSECONDS_PER_SECOND;
+    s->tick_offset = s->tick_offset - now;
 
     return 0;
 }
@@ -228,6 +243,7 @@ static const VMStateDescription vmstate_rtc = {
     .name = TYPE_XLNX_ZYNQMP_RTC,
     .version_id = 1,
     .minimum_version_id = 1,
+    .pre_save = rtc_pre_save,
     .post_load = rtc_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, XlnxZynqMPRTC, XLNX_ZYNQMP_RTC_R_MAX),
@@ -238,6 +254,7 @@ static const VMStateDescription vmstate_rtc = {
         VMSTATE_INT32(current_tm.tm_mday, XlnxZynqMPRTC),
         VMSTATE_INT32(current_tm.tm_mon, XlnxZynqMPRTC),
         VMSTATE_INT32(current_tm.tm_year, XlnxZynqMPRTC),
+        VMSTATE_UINT32(tick_offset, XlnxZynqMPRTC),
         VMSTATE_END_OF_LIST(),
     }
 };

@@ -39,6 +39,7 @@
 #include "chardev/char.h"
 #include "qemu/log.h"
 #include "qemu/config-file.h"
+#include "qemu/option.h"
 #include "qom/cpu.h"
 #include "block/block.h"
 #include "hw/ssi/ssi.h"
@@ -192,7 +193,7 @@ FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
         memory_region_transaction_begin();
         fdt_init_set_opaque(fdti, node_path, NULL);
         simple_bus_fdt_init(node_path, fdti);
-        while (qemu_co_enter_next(fdti->cq));
+        while (qemu_co_enter_next(fdti->cq, NULL));
         bdrv_drain_all();
         fdt_init_all_irqs(fdti);
         memory_region_transaction_commit();

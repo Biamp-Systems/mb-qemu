@@ -9,7 +9,7 @@
 #include "qapi/error.h"
 #include "chardev/char.h"
 #include "qemu/coroutine.h"
-#include "qapi-types.h"
+#include "qapi/qapi-types.h"
 
 #include "hw/char/serial.h"
 #include "hw/block/flash.h"

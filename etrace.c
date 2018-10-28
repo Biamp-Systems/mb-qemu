@@ -22,7 +22,7 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <sys/socket.h>
-#include <qemu/sockets.h>
+#include "qemu/sockets.h"
 #include <sys/un.h>
 #endif
 

@@ -21,6 +21,7 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "tcg-op.h"
 #include "exec/exec-all.h"
@@ -131,7 +132,7 @@ static uint8_t get_opxcode(uint32_t code)
 
 static TCGv load_zero(DisasContext *dc)
 {
-    if (TCGV_IS_UNUSED_I32(dc->zero)) {
+    if (!dc->zero) {
         dc->zero = tcg_const_i32(0);
     }
     return dc->zero;
@@ -772,12 +773,12 @@ static void handle_instruction(DisasContext *dc, CPUNios2State *env)
         goto illegal_op;
     }
 
-    TCGV_UNUSED_I32(dc->zero);
+    dc->zero = NULL;
 
     instr = &i_type_instructions[op];
     instr->handler(dc, code, instr->flags);
 
-    if (!TCGV_IS_UNUSED_I32(dc->zero)) {
+    if (dc->zero) {
         tcg_temp_free(dc->zero);
     }
 

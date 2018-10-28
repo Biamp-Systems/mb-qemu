@@ -20,6 +20,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/option.h"
 #include "hw/sysbus.h"
 #include "hw/hw.h"
 #include "net/net.h"
@@ -135,7 +136,7 @@ static void cpu_probe(FDTMachineInfo *fdti, char *node_path, uint32_t offset)
 {
     Error *errp = NULL;
 
-    Nios2CPU *cpu = NIOS2_CPU(cpu_generic_init(TYPE_NIOS2_CPU, "nios2"));
+    Nios2CPU *cpu = NIOS2_CPU(cpu_create(TYPE_NIOS2_CPU));
 
     qemu_register_reset(main_cpu_reset, cpu);
 
