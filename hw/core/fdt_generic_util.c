@@ -34,11 +34,14 @@
 #include "hw/sysbus.h"
 #include "qapi/error.h"
 #include "sysemu/sysemu.h"
+#include "qemu/cutils.h"
 #include "sysemu/blockdev.h"
 #include "chardev/char.h"
 #include "qemu/log.h"
 #include "qemu/config-file.h"
 #include "qom/cpu.h"
+#include "block/block.h"
+#include "hw/ssi/ssi.h"
 
 #ifndef FDT_GENERIC_UTIL_ERR_DEBUG
 #define FDT_GENERIC_UTIL_ERR_DEBUG 3
@@ -198,6 +201,7 @@ FDTMachineInfo *fdt_generic_create_machine(void *fdt, qemu_irq *cpu_irq)
             , node_path);
     }
 
+    bdrv_drain_all();
     DB_PRINT(0, "FDT: Device tree scan complete\n");
 
     /* Set the number of CPUs */
@@ -330,7 +334,7 @@ static qemu_irq fdt_get_gpio(FDTMachineInfo *fdti, char *node_path,
     DeviceState *parent;
     int i;
     Error *errp = NULL;
-    const char *reason;
+    const char *reason = NULL;
     bool free_reason = false;
     const char *propname = gpio_set->names->propname;
     const char *cells_propname = gpio_set->names->cells_propname;
@@ -416,9 +420,6 @@ static qemu_irq fdt_get_gpio(FDTMachineInfo *fdti, char *node_path,
                    && fgg_con->name) {
                 fgg_con++;
             }
-            if (!fgg_con) {
-                goto fail;
-            }
 
             idx -= fgg_con->fdt_index;
             gpio_name = fgg_con->name;
@@ -483,7 +484,10 @@ static qemu_irq fdt_get_gpio(FDTMachineInfo *fdti, char *node_path,
         return ret;
     }
 fail:
-    fprintf(stderr, "%s Failed: %s\n", node_path, reason);
+    if (reason) {
+        fprintf(stderr, "%s Failed: %s\n", node_path, reason);
+    }
+
 fail_silent:
     if (free_reason) {
         g_free((void *)reason);
@@ -746,6 +750,8 @@ qemu_irq *fdt_get_irq(FDTMachineInfo *fdti, char *node_path, int irq_idx,
 
 static void trim_version(char *x)
 {
+    long result;
+
     for (;;) {
         x = strchr(x, '-');
         if (!x) {
@@ -1199,15 +1205,17 @@ static int fdt_init_qdev(char *node_path, FDTMachineInfo *fdti, char *compat)
          * here. Don't use drive_get_next() as it always increments the
          * next_block_unit variable.
          */
-        object_property_find(OBJECT(dev), "drive", &errp);
-        if (errp == NULL) {
-            DriveInfo *dinfo = drive_get_next(IF_MTD);
-            if (dinfo) {
-                qdev_prop_set_drive(DEVICE(dev), "drive",
+        if (object_dynamic_cast(dev, TYPE_SSI_SLAVE)) {
+            object_property_find(OBJECT(dev), "drive", &errp);
+            if (errp == NULL) {
+                DriveInfo *dinfo = drive_get_next(IF_MTD);
+                if (dinfo) {
+                    qdev_prop_set_drive(DEVICE(dev), "drive",
                                     blk_by_legacy_dinfo(dinfo), &error_abort);
-            }
+                 }
+             }
+             errp = NULL;
         }
-        errp = NULL;
 
         /* Regular TYPE_DEVICE houskeeping */
         DB_PRINT_NP(0, "Short naming node: %s\n", short_name);

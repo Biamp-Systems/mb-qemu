@@ -21,7 +21,6 @@
 #include "qemu/error-report.h"
 #include "qom/cpu.h"
 
-#include <semaphore.h>
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
@@ -94,26 +93,15 @@ int64_t rp_normalized_vmclk(RemotePort *s)
     return clk;
 }
 
-static inline int64_t rp_denormalize_clk(RemotePort *s, int64_t rclk)
-{
-    int64_t clk;
-    clk = rclk + s->peer.clk_base;
-    return clk;
-}
-
 void rp_restart_sync_timer(RemotePort *s)
 {
-    if (!use_icount || !s->do_sync) {
+    if (!s->do_sync) {
         return;
     }
 
     if (s->sync.quantum) {
         ptimer_stop(s->sync.ptimer);
         ptimer_set_limit(s->sync.ptimer, s->sync.quantum, 1);
-        ptimer_run(s->sync.ptimer, 1);
-    } else {
-        ptimer_stop(s->sync.ptimer);
-        ptimer_set_limit(s->sync.ptimer, 10 * 1000, 1);
         ptimer_run(s->sync.ptimer, 1);
     }
 }
@@ -333,10 +321,6 @@ static void sync_timer_hit(void *opaque)
     int64_t clk;
     int64_t rclk;
     RemotePortDynPkt rsp;
-
-    if (!use_icount) {
-        hw_error("Sync timer without icount??\n");
-    }
 
     clk = rp_normalized_vmclk(s);
     if (s->sync.resp_timer_enabled) {
@@ -793,7 +777,8 @@ static Property rp_properties[] = {
     DEFINE_PROP_STRING("chardesc", RemotePort, chardesc),
     DEFINE_PROP_STRING("chrdev-id", RemotePort, chrdev_id),
     DEFINE_PROP_BOOL("sync", RemotePort, do_sync, false),
-    DEFINE_PROP_UINT64("sync-quantum", RemotePort, peer.local_cfg.quantum, 0),
+    DEFINE_PROP_UINT64("sync-quantum", RemotePort, peer.local_cfg.quantum,
+                       1000000),
     DEFINE_PROP_END_OF_LIST(),
 };
 

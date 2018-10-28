@@ -81,16 +81,16 @@ unsigned int mmu_translate(struct microblaze_mmu *mmu,
 {
     unsigned int i, hit = 0;
     unsigned int tlb_ex = 0, tlb_wr = 0, tlb_zsel;
-    unsigned int tlb_size;
-    uint32_t tlb_tag, tlb_rpn, mask, t0;
+    uint64_t tlb_tag, tlb_rpn, mask;
+    uint32_t tlb_size, t0;
 
     lu->err = ERR_MISS;
     for (i = 0; i < ARRAY_SIZE(mmu->rams[RAM_TAG]); i++) {
-        uint32_t t, d;
+        uint64_t t, d;
 
         /* Lookup and decode.  */
         t = mmu->rams[RAM_TAG][i];
-        D(qemu_log("TLB %d valid=%d\n", i, t & TLB_VALID));
+        D(qemu_log("TLB %" PRId64 " valid=%d\n", i, t & TLB_VALID));
         if (t & TLB_VALID) {
             tlb_size = tlb_decode_size((t & TLB_PAGESZ_MASK) >> 7);
             if (tlb_size < TARGET_PAGE_SIZE) {
@@ -98,7 +98,7 @@ unsigned int mmu_translate(struct microblaze_mmu *mmu,
                 abort();
             }
 
-            mask = ~(tlb_size - 1);
+            mask = ~((uint64_t)tlb_size - 1);
             tlb_tag = t & TLB_EPN_MASK;
             if ((vaddr & mask) != (tlb_tag & mask)) {
                 D(qemu_log("TLB %d vaddr=%x != tag=%x\n",
@@ -164,6 +164,7 @@ unsigned int mmu_translate(struct microblaze_mmu *mmu,
             tlb_rpn = d & TLB_RPN_MASK;
 
             lu->vaddr = tlb_tag;
+            lu->paddr = tlb_rpn & mmu->c_addr_mask;
             lu->paddr = tlb_rpn;
             lu->size = tlb_size;
             lu->err = ERR_HIT;
@@ -179,13 +180,17 @@ done:
 }
 
 /* Writes/reads to the MMU's special regs end up here.  */
-uint32_t mmu_read(CPUMBState *env, uint32_t rn)
+uint32_t mmu_read(CPUMBState *env, bool ext, uint32_t rn)
 {
     unsigned int i;
-    uint32_t r;
+    uint32_t r = 0;
 
     if (env->mmu.c_mmu < 2 || !env->mmu.c_mmu_tlb_access) {
         qemu_log_mask(LOG_GUEST_ERROR, "MMU access on MMU-less system\n");
+        return 0;
+    }
+    if (ext && rn != MMU_R_TLBLO) {
+        qemu_log_mask(LOG_GUEST_ERROR, "Extended access only to TLBLO.\n");
         return 0;
     }
 
@@ -199,7 +204,7 @@ uint32_t mmu_read(CPUMBState *env, uint32_t rn)
             }
 
             i = env->mmu.regs[MMU_R_TLBX] & 0xff;
-            r = env->mmu.rams[rn & 1][i];
+            r = extract64(env->mmu.rams[rn & 1][i], ext * 32, 32);
             if (rn == MMU_R_TLBHI)
                 env->mmu.regs[MMU_R_PID] = env->mmu.tids[i];
             break;
@@ -211,22 +216,33 @@ uint32_t mmu_read(CPUMBState *env, uint32_t rn)
             }
             r = env->mmu.regs[rn];
             break;
-        default:
+        case MMU_R_TLBX:
             r = env->mmu.regs[rn];
+            break;
+        case MMU_R_TLBSX:
+            qemu_log_mask(LOG_GUEST_ERROR, "TLBSX is write-only.\n");
+            break;
+        default:
+            qemu_log_mask(LOG_GUEST_ERROR, "Invalid MMU register %d.\n", rn);
             break;
     }
     D(qemu_log("%s rn=%d=%x\n", __func__, rn, r));
     return r;
 }
 
-void mmu_write(CPUMBState *env, uint32_t rn, uint32_t v)
+void mmu_write(CPUMBState *env, bool ext, uint32_t rn, uint32_t v)
 {
     MicroBlazeCPU *cpu = mb_env_get_cpu(env);
+    uint64_t tmp64;
     unsigned int i;
     D(qemu_log("%s rn=%d=%x old=%x\n", __func__, rn, v, env->mmu.regs[rn]));
 
     if (env->mmu.c_mmu < 2 || !env->mmu.c_mmu_tlb_access) {
         qemu_log_mask(LOG_GUEST_ERROR, "MMU access on MMU-less system\n");
+        return;
+    }
+    if (ext && rn != MMU_R_TLBLO) {
+        qemu_log_mask(LOG_GUEST_ERROR, "Extended access only to TLBLO.\n");
         return;
     }
 
@@ -237,12 +253,14 @@ void mmu_write(CPUMBState *env, uint32_t rn, uint32_t v)
             i = env->mmu.regs[MMU_R_TLBX] & 0xff;
             if (rn == MMU_R_TLBHI) {
                 if (i < 3 && !(v & TLB_VALID) && qemu_loglevel_mask(~0))
-                    qemu_log_mask(LOG_GUEST_ERROR, "invalidating index %x at pc=%x\n",
+                    qemu_log_mask(LOG_GUEST_ERROR,
+                             "invalidating index %x at pc=%" PRIx64 "\n",
                              i, env->sregs[SR_PC]);
                 env->mmu.tids[i] = env->mmu.regs[MMU_R_PID] & 0xff;
                 mmu_flush_idx(env, i);
             }
-            env->mmu.rams[rn & 1][i] = v;
+            tmp64 = env->mmu.rams[rn & 1][i];
+            env->mmu.rams[rn & 1][i] = deposit64(tmp64, ext * 32, 32, v);
 
             D(qemu_log("%s ram[%d][%d]=%x\n", __func__, rn & 1, i, v));
             break;
@@ -270,6 +288,10 @@ void mmu_write(CPUMBState *env, uint32_t rn, uint32_t v)
                 env->mmu.regs[rn] = v;
             }
             break;
+        case MMU_R_TLBX:
+            /* Bit 31 is read-only.  */
+            env->mmu.regs[rn] = deposit32(env->mmu.regs[rn], 0, 31, v);
+            break;
         case MMU_R_TLBSX:
         {
             struct microblaze_mmu_lookup lu;
@@ -284,12 +306,13 @@ void mmu_write(CPUMBState *env, uint32_t rn, uint32_t v)
                                 v & TLB_EPN_MASK, 0, cpu_mmu_index(env, false));
             if (hit) {
                 env->mmu.regs[MMU_R_TLBX] = lu.idx;
-            } else
-                env->mmu.regs[MMU_R_TLBX] |= 0x80000000;
+            } else {
+                env->mmu.regs[MMU_R_TLBX] |= R_TBLX_MISS_MASK;
+            }
             break;
         }
         default:
-            env->mmu.regs[rn] = v;
+            qemu_log_mask(LOG_GUEST_ERROR, "Invalid MMU register %d.\n", rn);
             break;
    }
 }

@@ -275,7 +275,11 @@ static void dmach_data_process(ZynqMPCSUDMA *s, uint8_t *buf, unsigned int len)
 
 static inline uint64_t dmach_addr(ZynqMPCSUDMA *s)
 {
-    return s->regs[R_ADDR];
+    uint64_t addr;
+
+    addr = s->regs[R_ADDR];
+    addr |= (uint64_t) s->regs[R_ADDR_MSB] << 32;
+    return addr;
 }
 
 /* len is in bytes.  */
@@ -598,8 +602,12 @@ static void zynqmp_csu_dma_realize(DeviceState *dev, Error **errp)
     s->bh = qemu_bh_new(src_timeout_hit, s);
     s->src_timer = ptimer_init(s->bh, PTIMER_POLICY_DEFAULT);
 
-    s->dma_as = s->dma_mr ? address_space_init_shareable(s->dma_mr, NULL)
-                          : &address_space_memory;
+    if (s->dma_mr) {
+        s->dma_as = g_malloc0(sizeof(AddressSpace));
+        address_space_init(s->dma_as, s->dma_mr, NULL);
+    } else {
+        s->dma_as = &address_space_memory;
+    }
 
     if (!s->attr) {
         s->attr = MEMORY_TRANSACTION_ATTR(

@@ -77,7 +77,7 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
                                 phys_ram_alias);
 
     /* Create CPU -- FIXME */
-    cpu = cpu_nios2_init("nios2");
+    cpu = NIOS2_CPU(cpu_generic_init(TYPE_NIOS2_CPU, "nios2"));
 
     nios2_iic_create(cpu);
     for (i = 0; i < 32; i++) {

@@ -156,6 +156,7 @@ static void mb_cpu_reset(CPUState *s)
     env->mmu.c_mmu = 3;
     env->mmu.c_mmu_tlb_access = 3;
     env->mmu.c_mmu_zones = 16;
+    env->mmu.c_addr_mask = MAKE_64BIT_MASK(0, cpu->cfg.addr_size);
 
     if (cpu->env.memattr_p) {
         env->memattr[0].attrs = *cpu->env.memattr_p;
@@ -182,6 +183,12 @@ static void mb_cpu_realizefn(DeviceState *dev, Error **errp)
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
         error_propagate(errp, local_err);
+        return;
+    }
+
+    if (cpu->cfg.addr_size < 32 || cpu->cfg.addr_size > 64) {
+        error_setg(errp, "addr-size %d is out of range (32 - 64)",
+                   cpu->cfg.addr_size);
         return;
     }
 
@@ -230,8 +237,10 @@ static void mb_cpu_realizefn(DeviceState *dev, Error **errp)
     env->pvr.regs[5] |= cpu->cfg.dcache_writeback ?
                                         PVR5_DCACHE_WRITEBACK_MASK : 0;
 
-    env->pvr.regs[10] = 0x0c000000; /* Default to spartan 3a dsp family.  */
-    env->pvr.regs[11] = PVR11_USE_MMU | (16 << 17);
+    env->pvr.regs[10] = 0x0c000000 | /* Default to spartan 3a dsp family.  */
+                        (cpu->cfg.addr_size - 32) << PVR10_ASIZE_SHIFT;
+    env->pvr.regs[11] = cpu->cfg.use_mmu ? PVR11_USE_MMU : 0 |
+                        16 << 17;
 
     mcc->parent_realize(dev, errp);
 }
@@ -241,7 +250,6 @@ static void mb_cpu_initfn(Object *obj)
     CPUState *cs = CPU(obj);
     MicroBlazeCPU *cpu = MICROBLAZE_CPU(obj);
     CPUMBState *env = &cpu->env;
-    static bool tcg_initialized;
 
     cs->env_ptr = env;
 
@@ -260,11 +268,6 @@ static void mb_cpu_initfn(Object *obj)
                              OBJ_PROP_LINK_UNREF_ON_RELEASE,
                              &error_abort);
 #endif
-
-    if (tcg_enabled() && !tcg_initialized) {
-        tcg_initialized = true;
-        mb_tcg_init();
-    }
 }
 
 static const VMStateDescription vmstate_mb_cpu = {
@@ -276,6 +279,14 @@ static Property mb_properties[] = {
     DEFINE_PROP_UINT32("base-vectors", MicroBlazeCPU, cfg.base_vectors, 0),
     DEFINE_PROP_BOOL("use-stack-protection", MicroBlazeCPU, cfg.stackprot,
                      false),
+    /*
+     * This is the C_ADDR_SIZE synth-time configuration option of the
+     * MicroBlaze cores. Supported values range between 32 and 64.
+     *
+     * When set to > 32, 32bit MicroBlaze can emit load/stores
+     * with extended addressing.
+     */
+    DEFINE_PROP_UINT8("addr-size", MicroBlazeCPU, cfg.addr_size, 32),
     /* If use-fpu > 0 - FPU is enabled
      * If use-fpu = 2 - Floating point conversion and square root instructions
      *                  are enabled
@@ -312,6 +323,11 @@ static const FDTGenericGPIOSet mb_ctrl_gpios[] = {
 };
 #endif
 
+static ObjectClass *mb_cpu_class_by_name(const char *cpu_model)
+{
+    return object_class_by_name(TYPE_MICROBLAZE_CPU);
+}
+
 static void mb_cpu_class_init(ObjectClass *oc, void *data)
 {
 #ifndef CONFIG_USER_ONLY
@@ -327,6 +343,7 @@ static void mb_cpu_class_init(ObjectClass *oc, void *data)
     mcc->parent_reset = cc->reset;
     cc->reset = mb_cpu_reset;
 
+    cc->class_by_name = mb_cpu_class_by_name;
     cc->has_work = mb_cpu_has_work;
     cc->do_interrupt = mb_cpu_do_interrupt;
     cc->cpu_exec_interrupt = mb_cpu_exec_interrupt;
@@ -349,6 +366,7 @@ static void mb_cpu_class_init(ObjectClass *oc, void *data)
     fggc->controller_gpios = mb_ctrl_gpios;
 #endif
     cc->disas_set_info = mb_disas_set_info;
+    cc->tcg_initialize = mb_tcg_init;
 }
 
 static const TypeInfo mb_cpu_type_info = {

@@ -383,7 +383,8 @@ static inline void arasan_nfc_do_dma(ArasanNFCState *s, bool rnw)
     while (DEP_AF_EX32(s->regs, CMD, DMA_EN) == 0x2 &&
            !(rnw ? fifo_is_empty : fifo_is_full)(&s->buffer) &&
            !s->dbb_blocked) {
-        uint32_t dbb_mask = ONES(s->regs[R_DMA_BUF_BOUNDARY] + 12);
+        uint32_t dbb_mask = MAKE_64BIT_MASK(0,
+                                            s->regs[R_DMA_BUF_BOUNDARY] + 12);
         uint8_t tmp;
 
         if (rnw) {
@@ -807,8 +808,12 @@ static void arasan_nfc_realize(DeviceState *dev, Error ** errp)
 
     fifo_create8(&s->buffer, 1);
 
-    s->dma_as = s->dma_mr ? address_space_init_shareable(s->dma_mr, NULL)
-                          : &address_space_memory;
+    if (s->dma_mr) {
+        s->dma_as = g_malloc0(sizeof(AddressSpace));
+        address_space_init(s->dma_as, s->dma_mr, NULL);
+    } else {
+        s->dma_as = &address_space_memory;
+    }
 }
 
 static void arasan_nfc_init(Object *obj)

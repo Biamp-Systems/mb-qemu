@@ -118,17 +118,14 @@ typedef struct DeviceClass {
 
     /* callbacks */
     void (*reset)(DeviceState *dev);
-    void (*halt)(DeviceState *dev);
-    void (*unhalt)(DeviceState *dev);
+    DeviceRealize realize;
+    DeviceUnrealize unrealize;
 
     /* callbacks for setting of power state */
     void (*pwr_cntrl)(void *opaque, int n, int level);
     void (*hlt_cntrl)(void *opaque, int n, int level);
     /* reset control */
     void (*rst_cntrl)(void *opaque, int n, int level);
-
-    DeviceRealize realize;
-    DeviceUnrealize unrealize;
 
     /* device state */
     const struct VMStateDescription *vmsd;
@@ -168,6 +165,7 @@ struct DeviceState {
     /*< public >*/
 
     char *id;
+    char *canonical_path;
     bool realized;
     bool pending_deleted_event;
     QemuOpts *opts;
@@ -265,7 +263,7 @@ struct Property {
 struct PropertyInfo {
     const char *name;
     const char *description;
-    const char * const *enum_table;
+    const QEnumLookup *enum_table;
     int (*print)(DeviceState *dev, Property *prop, char *dest, size_t len);
     void (*set_default_value)(Object *obj, const Property *prop);
     void (*create)(Object *obj, Property *prop, Error **errp);
@@ -398,20 +396,6 @@ void qdev_machine_init(void);
  * Reset a single device (by calling the reset method).
  */
 void device_reset(DeviceState *dev);
-
-/**
- * @device_halt
- *
- * Halt a single device (by calling the halt method).
- */
-void device_halt(DeviceState *dev);
-
-/**
- * @device_unhalt
- *
- * Unhalt a single device (by calling the unhalt method).
- */
-void device_unhalt(DeviceState *dev);
 
 const struct VMStateDescription *qdev_get_vmsd(DeviceState *dev);
 

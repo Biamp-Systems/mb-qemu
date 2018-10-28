@@ -26,12 +26,13 @@
 #define XILINX_SPIPS_H
 
 #include "hw/ssi/ssi.h"
-#include "qemu/fifo.h"
+#include "qemu/fifo32.h"
 #include "hw/stream.h"
 
 typedef struct XilinxSPIPS XilinxSPIPS;
 
-#define XLNX_SPIPS_R_MAX        0x200
+#define XLNX_SPIPS_R_MAX        (0x100 / 4)
+#define XLNX_ZYNQMP_SPIPS_R_MAX (0x800 / 4)
 
 /* Bite off 4k chunks at a time */
 #define LQSPI_CACHE_SIZE 1024
@@ -62,6 +63,7 @@ struct XilinxSPIPS {
     uint8_t num_busses;
 
     uint8_t snoop_state;
+    int cmd_dummies;
     uint8_t link_state;
     uint8_t link_state_next;
     uint8_t link_state_next_when;
@@ -69,21 +71,8 @@ struct XilinxSPIPS {
     bool *cs_lines_state;
     SSIBus **spi;
 
-    Fifo rx_fifo;
-    Fifo tx_fifo;
-    /* GQSPI has seperate tx/rx fifos */
-    Fifo rx_fifo_g;
-    Fifo tx_fifo_g;
-    /*
-     * at the end of each generic command, misaligned extra bytes are discard
-     * or padded to tx and rx respectively to round it out (and avoid need for
-     * individual byte access. Since we use byte fifos, keep track of the
-     * alignment WRT to word access.
-     */
-    uint8_t rx_fifo_g_align;
-    uint8_t tx_fifo_g_align;
-
-    Fifo fifo_g;
+    Fifo8 rx_fifo;
+    Fifo8 tx_fifo;
 
     uint8_t num_txrx_bytes;
     uint32_t rx_discard;
@@ -91,7 +80,6 @@ struct XilinxSPIPS {
     uint32_t regs[XLNX_SPIPS_R_MAX];
 
     bool man_start_com;
-    bool man_start_com_g;
 };
 
 typedef struct {
@@ -104,7 +92,6 @@ typedef struct {
     MemoryRegion *hack_dma;
     AddressSpace *hack_as;
 
-    uint8_t spi_mode;
     uint8_t lqspi_buf[LQSPI_CACHE_SIZE];
     hwaddr lqspi_cached_addr;
     Error *migration_blocker;
@@ -116,7 +103,24 @@ typedef struct {
 
     StreamSlave *dma;
     uint8_t dma_buf[4];
-} ZynqMPQSPIPS;
+    int gqspi_irqline;
+
+    uint32_t regs[XLNX_ZYNQMP_SPIPS_R_MAX];
+
+    /* GQSPI has seperate tx/rx fifos */
+    Fifo8 rx_fifo_g;
+    Fifo8 tx_fifo_g;
+    Fifo32 fifo_g;
+    /*
+     * At the end of each generic command, misaligned extra bytes are discard
+     * or padded to tx and rx respectively to round it out (and avoid need for
+     * individual byte access. Since we use byte fifos, keep track of the
+     * alignment WRT to word access.
+     */
+    uint8_t rx_fifo_g_align;
+    uint8_t tx_fifo_g_align;
+    bool man_start_com_g;
+} XlnxZynqMPQSPIPS;
 
 typedef struct XilinxSPIPSClass {
     SysBusDeviceClass parent_class;
@@ -129,7 +133,7 @@ typedef struct XilinxSPIPSClass {
 
 #define TYPE_XILINX_SPIPS "xlnx.ps7-spi"
 #define TYPE_XILINX_QSPIPS "xlnx.ps7-qspi"
-#define TYPE_ZYNQMP_QSPIPS "xlnx.usmp-gqspi"
+#define TYPE_XLNX_ZYNQMP_QSPIPS "xlnx.usmp-gqspi"
 
 #define XILINX_SPIPS(obj) \
      OBJECT_CHECK(XilinxSPIPS, (obj), TYPE_XILINX_SPIPS)
@@ -141,7 +145,7 @@ typedef struct XilinxSPIPSClass {
 #define XILINX_QSPIPS(obj) \
      OBJECT_CHECK(XilinxQSPIPS, (obj), TYPE_XILINX_QSPIPS)
 
-#define ZYNQMP_QSPIPS(obj) \
-     OBJECT_CHECK(ZynqMPQSPIPS, (obj), TYPE_ZYNQMP_QSPIPS)
+#define XLNX_ZYNQMP_QSPIPS(obj) \
+     OBJECT_CHECK(XlnxZynqMPQSPIPS, (obj), TYPE_XLNX_ZYNQMP_QSPIPS)
 
 #endif /* XILINX_SPIPS_H */

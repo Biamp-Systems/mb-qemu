@@ -184,10 +184,12 @@ microblaze_generic_fdt_reset(MicroBlazeCPU *cpu)
             }
             i++;
         }
+
+        env->pvr.regs[10] &= ~0xff000000;
         if (!str || !arch_lookup[i].arch) {
-            env->pvr.regs[10] = 0x0c000000; /* spartan 3a dsp family.  */
+            env->pvr.regs[10] |= 0x0c000000; /* spartan 3a dsp family.  */
         } else {
-            env->pvr.regs[10] = arch_lookup[i].arch << 24;
+            env->pvr.regs[10] |= arch_lookup[i].arch << 24;
         }
         g_free(str);
     }
@@ -241,6 +243,7 @@ microblaze_generic_fdt_init(MachineState *machine)
     ram_addr_t ram_kernel_base = 0, ram_kernel_size = 0;
     void *fdt = NULL;
     const char *dtb_arg, *hw_dtb_arg;
+    const char *kernel_filename;
     QemuOpts *machine_opts;
     int fdt_size;
 
@@ -379,8 +382,8 @@ microblaze_generic_fdt_init(MachineState *machine)
              * RAM to handle this.
              */
             MemoryRegion *hack_ram = g_new(MemoryRegion, 1);
-            memory_region_init_ram(hack_ram, NULL, "hack_ram", 0x1000,
-                                   &error_abort);
+            memory_region_init_ram_nomigrate(hack_ram, NULL, "hack_ram",
+                                             0x1000, &error_abort);
             vmstate_register_ram_global(hack_ram);
             memory_region_add_subregion(get_system_memory(), 0, hack_ram);
         }
@@ -389,9 +392,12 @@ microblaze_generic_fdt_init(MachineState *machine)
     fdt_init_destroy_fdti(fdti);
 
     fdt_g = fdt;
-    microblaze_load_kernel(MICROBLAZE_CPU(first_cpu), ram_kernel_base,
-                           ram_kernel_size, machine->initrd_filename, NULL,
-                           microblaze_generic_fdt_reset, 0, fdt, fdt_size);
+    kernel_filename = qemu_opt_get(machine_opts, "kernel");
+    if (kernel_filename) {
+        microblaze_load_kernel(MICROBLAZE_CPU(first_cpu), ram_kernel_base,
+                               ram_kernel_size, machine->initrd_filename, NULL,
+                               microblaze_generic_fdt_reset, 0, fdt, fdt_size);
+    }
 
     /* Register FDT to prop mapper for secondary cores.  */
     cpu = CPU_NEXT(first_cpu);

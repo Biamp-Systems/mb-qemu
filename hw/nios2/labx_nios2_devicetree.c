@@ -135,7 +135,7 @@ static void cpu_probe(FDTMachineInfo *fdti, char *node_path, uint32_t offset)
 {
     Error *errp = NULL;
 
-    Nios2CPU *cpu = cpu_nios2_init("nios2");
+    Nios2CPU *cpu = NIOS2_CPU(cpu_generic_init(TYPE_NIOS2_CPU, "nios2"));
 
     qemu_register_reset(main_cpu_reset, cpu);
 
