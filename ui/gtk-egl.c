@@ -48,11 +48,7 @@ void gd_egl_init(VirtualConsole *vc)
         return;
     }
 
-#if GTK_CHECK_VERSION(3, 0, 0)
     Window x11_window = gdk_x11_window_get_xid(gdk_window);
-#else
-    Window x11_window = gdk_x11_drawable_get_xid(gdk_window);
-#endif
     if (!x11_window) {
         return;
     }
@@ -82,7 +78,8 @@ void gd_egl_draw(VirtualConsole *vc)
                        vc->gfx.esurface, vc->gfx.ectx);
 
         window = gtk_widget_get_window(vc->gfx.drawing_area);
-        gdk_drawable_get_size(window, &ww, &wh);
+        ww = gdk_window_get_width(window);
+        wh = gdk_window_get_height(window);
         surface_gl_setup_viewport(vc->gfx.gls, vc->gfx.ds, ww, wh);
         surface_gl_render_texture(vc->gfx.gls, vc->gfx.ds);
 
@@ -265,7 +262,8 @@ void gd_egl_scanout_flush(DisplayChangeListener *dcl,
                    vc->gfx.esurface, vc->gfx.ectx);
 
     window = gtk_widget_get_window(vc->gfx.drawing_area);
-    gdk_drawable_get_size(window, &ww, &wh);
+    ww = gdk_window_get_width(window);
+    wh = gdk_window_get_height(window);
     egl_fb_setup_default(&vc->gfx.win_fb, ww, wh);
     if (vc->gfx.cursor_fb.texture) {
         egl_texture_blit(vc->gfx.gls, &vc->gfx.win_fb, &vc->gfx.guest_fb,
@@ -280,12 +278,12 @@ void gd_egl_scanout_flush(DisplayChangeListener *dcl,
     eglSwapBuffers(qemu_egl_display, vc->gfx.esurface);
 }
 
-void gtk_egl_init(void)
+void gtk_egl_init(DisplayGLMode mode)
 {
     GdkDisplay *gdk_display = gdk_display_get_default();
     Display *x11_display = gdk_x11_display_get_xdisplay(gdk_display);
 
-    if (qemu_egl_init_dpy_x11(x11_display) < 0) {
+    if (qemu_egl_init_dpy_x11(x11_display, mode) < 0) {
         return;
     }
 

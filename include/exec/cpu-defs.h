@@ -24,6 +24,7 @@
 #endif
 
 #include "qemu/host-utils.h"
+#include "qemu/thread.h"
 #include "qemu/queue.h"
 #ifdef CONFIG_TCG
 #include "tcg-target.h"
@@ -127,6 +128,15 @@ QEMU_BUILD_BUG_ON(sizeof(CPUTLBEntry) != (1 << CPU_TLB_ENTRY_BITS));
  * structs into one.)
  */
 typedef struct CPUIOTLBEntry {
+    /*
+     * @addr contains:
+     *  - in the lower TARGET_PAGE_BITS, a physical section number
+     *  - with the lower TARGET_PAGE_BITS masked off, an offset which
+     *    must be added to the virtual address to obtain:
+     *     + the ram_addr_t of the target RAM (if the physical section
+     *       number is PHYS_SECTION_NOTDIRTY or PHYS_SECTION_ROM)
+     *     + the offset within the target MemoryRegion (otherwise)
+     */
     hwaddr addr;
     MemTxAttrs attrs;
 } CPUIOTLBEntry;
@@ -137,6 +147,8 @@ typedef struct CPUIOTLBEntry {
 
 #define CPU_COMMON_TLB \
     /* The meaning of the MMU modes is defined in the target code. */   \
+    /* tlb_lock serializes updates to tlb_table and tlb_v_table */      \
+    QemuSpin tlb_lock;                                                  \
     CPUTLBEntry tlb_table[NB_MMU_MODES][CPU_TLB_SIZE];                  \
     CPUTLBEntry tlb_v_table[NB_MMU_MODES][CPU_VTLB_SIZE];               \
     CPUIOTLBEntry iotlb[NB_MMU_MODES][CPU_TLB_SIZE];                    \

@@ -37,7 +37,6 @@ target_ulong kvmppc_configure_v3_mmu(PowerPCCPU *cpu,
                                      bool radix, bool gtse,
                                      uint64_t proc_tbl);
 #ifndef CONFIG_USER_ONLY
-off_t kvmppc_alloc_rma(void **rma);
 bool kvmppc_spapr_use_multitce(void);
 int kvmppc_spapr_enable_inkernel_multitce(void);
 void *kvmppc_create_spapr_tce(uint32_t liobn, uint32_t page_shift,
@@ -71,7 +70,9 @@ int kvmppc_resize_hpt_prepare(PowerPCCPU *cpu, target_ulong flags, int shift);
 int kvmppc_resize_hpt_commit(PowerPCCPU *cpu, target_ulong flags, int shift);
 bool kvmppc_pvr_workaround_required(PowerPCCPU *cpu);
 
-bool kvmppc_is_mem_backend_page_size_ok(const char *obj_path);
+bool kvmppc_hpt_needs_host_contiguous_pages(void);
+void kvm_check_mmu(PowerPCCPU *cpu, Error **errp);
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online);
 
 #else
 
@@ -187,12 +188,13 @@ static inline target_ulong kvmppc_configure_v3_mmu(PowerPCCPU *cpu,
     return 0;
 }
 
-#ifndef CONFIG_USER_ONLY
-static inline off_t kvmppc_alloc_rma(void **rma)
+static inline void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu,
+                                             unsigned int online)
 {
-    return 0;
+    return;
 }
 
+#ifndef CONFIG_USER_ONLY
 static inline bool kvmppc_spapr_use_multitce(void)
 {
     return false;
@@ -228,9 +230,13 @@ static inline uint64_t kvmppc_rma_size(uint64_t current_size,
     return ram_size;
 }
 
-static inline bool kvmppc_is_mem_backend_page_size_ok(const char *obj_path)
+static inline bool kvmppc_hpt_needs_host_contiguous_pages(void)
 {
-    return true;
+    return false;
+}
+
+static inline void kvm_check_mmu(PowerPCCPU *cpu, Error **errp)
+{
 }
 
 static inline bool kvmppc_has_cap_spapr_vfio(void)

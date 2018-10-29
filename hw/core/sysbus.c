@@ -18,6 +18,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "monitor/monitor.h"
 #include "exec/address-spaces.h"
@@ -202,15 +203,18 @@ void sysbus_init_ioports(SysBusDevice *dev, uint32_t ioport, uint32_t size)
     }
 }
 
-static int sysbus_device_init(DeviceState *dev)
+/* TODO remove once all sysbus devices have been converted to realize */
+static void sysbus_realize(DeviceState *dev, Error **errp)
 {
     SysBusDevice *sd = SYS_BUS_DEVICE(dev);
     SysBusDeviceClass *sbc = SYS_BUS_DEVICE_GET_CLASS(sd);
 
     if (!sbc->init) {
-        return 0;
+        return;
     }
-    return sbc->init(sd);
+    if (sbc->init(sd) < 0) {
+        error_setg(errp, "Device initialization failed");
+    }
 }
 
 DeviceState *sysbus_create_varargs(const char *name,
@@ -291,16 +295,8 @@ static char *sysbus_get_fw_dev_path(DeviceState *dev)
 {
     SysBusDevice *s = SYS_BUS_DEVICE(dev);
     SysBusDeviceClass *sbc = SYS_BUS_DEVICE_GET_CLASS(s);
-    /* for the explicit unit address fallback case: */
     char *addr, *fw_dev_path;
 
-    if (s->num_mmio) {
-        return g_strdup_printf("%s@" TARGET_FMT_plx, qdev_fw_name(dev),
-                               s->mmio[0].addr);
-    }
-    if (s->num_pio) {
-        return g_strdup_printf("%s@i%04x", qdev_fw_name(dev), s->pio[0]);
-    }
     if (sbc->explicit_ofw_unit_address) {
         addr = sbc->explicit_ofw_unit_address(s);
         if (addr) {
@@ -308,6 +304,13 @@ static char *sysbus_get_fw_dev_path(DeviceState *dev)
             g_free(addr);
             return fw_dev_path;
         }
+    }
+    if (s->num_mmio) {
+        return g_strdup_printf("%s@" TARGET_FMT_plx, qdev_fw_name(dev),
+                               s->mmio[0].addr);
+    }
+    if (s->num_pio) {
+        return g_strdup_printf("%s@i%04x", qdev_fw_name(dev), s->pio[0]);
     }
     return g_strdup(qdev_fw_name(dev));
 }
@@ -376,7 +379,7 @@ static void sysbus_device_class_init(ObjectClass *klass, void *data)
     DeviceClass *k = DEVICE_CLASS(klass);
     FDTGenericMMapClass *fmc = FDT_GENERIC_MMAP_CLASS(klass);
 
-    k->init = sysbus_device_init;
+    k->realize = sysbus_realize;
     k->bus_type = TYPE_SYSTEM_BUS;
     k->pwr_cntrl = sysbus_device_pwr_cntrl;
     k->hlt_cntrl = sysbus_device_hlt_cntrl;
@@ -429,6 +432,14 @@ BusState *sysbus_get_default(void)
         main_system_bus_create();
     }
     return main_system_bus;
+}
+
+void sysbus_init_child_obj(Object *parent, const char *childname, void *child,
+                           size_t childsize, const char *childtype)
+{
+    object_initialize_child(parent, childname, child, childsize, childtype,
+                            &error_abort, NULL);
+    qdev_set_parent_bus(DEVICE(child), sysbus_get_default());
 }
 
 static void sysbus_register_types(void)

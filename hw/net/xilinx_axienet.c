@@ -688,8 +688,8 @@ static void axienet_eth_rx_notify(void *opaque)
 {
     XilinxAXIEnet *s = XILINX_AXI_ENET(opaque);
 
-    while (s->rxappsize && stream_can_push(s->tx_control_dev,
-                                           axienet_eth_rx_notify, s)) {
+    while (s->rxappsize && s->tx_control_dev &&
+           stream_can_push(s->tx_control_dev, axienet_eth_rx_notify, s)) {
         size_t ret = stream_push(s->tx_control_dev,
                                  (void *)s->rxapp + CONTROL_PAYLOAD_SIZE
                                  - s->rxappsize, s->rxappsize,
@@ -697,8 +697,8 @@ static void axienet_eth_rx_notify(void *opaque)
         s->rxappsize -= ret;
     }
 
-    while (s->rxsize && stream_can_push(s->tx_data_dev,
-                                        axienet_eth_rx_notify, s)) {
+    while (s->rxsize && s->tx_data_dev &&
+           stream_can_push(s->tx_data_dev, axienet_eth_rx_notify, s)) {
         size_t ret = stream_push(s->tx_data_dev, (void *)s->rxmem + s->rxpos,
                                  s->rxsize, STREAM_ATTR_EOP);
         s->rxsize -= ret;
@@ -960,12 +960,12 @@ static void xilinx_enet_realize(DeviceState *dev, Error **errp)
     object_property_add_link(OBJECT(ds), "enet", "xlnx.axi-ethernet",
                              (Object **) &ds->enet,
                              object_property_allow_set_link,
-                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             OBJ_PROP_LINK_STRONG,
                              &local_err);
     object_property_add_link(OBJECT(cs), "enet", "xlnx.axi-ethernet",
                              (Object **) &cs->enet,
                              object_property_allow_set_link,
-                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             OBJ_PROP_LINK_STRONG,
                              &local_err);
     if (local_err) {
         goto xilinx_enet_realize_fail;

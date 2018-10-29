@@ -381,12 +381,12 @@ static Chardev *rp_autocreate_chardev(RemotePort *s, char *name)
     char *chardesc;
 
     chardesc = rp_autocreate_chardesc(s, false);
-    chr = qemu_chr_new_noreplay(name, chardesc);
+    chr = qemu_chr_new_noreplay(name, chardesc, true);
     free(chardesc);
 
     if (!chr) {
         chardesc = rp_autocreate_chardesc(s, true);
-        chr = qemu_chr_new_noreplay(name, chardesc);
+        chr = qemu_chr_new_noreplay(name, chardesc, true);
         free(chardesc);
     }
     return chr;
@@ -795,7 +795,7 @@ static void rp_init(Object *obj)
         object_property_add_link(obj, name, TYPE_REMOTE_PORT_DEVICE,
                              (Object **)&s->devs[i],
                              qdev_prop_allow_set_link,
-                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             OBJ_PROP_LINK_STRONG,
                              &error_abort);
         g_free(name);
     }

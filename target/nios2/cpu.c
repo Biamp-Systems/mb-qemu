@@ -57,7 +57,7 @@ static void nios2_cpu_reset(CPUState *cs)
 
     ncc->parent_reset(cs);
 
-    tlb_flush(cs);
+    //tlb_flush(cs);
 
     memset(env->regs, 0, sizeof(uint32_t) * NUM_CORE_REGS);
     env->regs[R_PC] = cpu->reset_addr;

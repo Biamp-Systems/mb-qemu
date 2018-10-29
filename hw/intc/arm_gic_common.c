@@ -190,8 +190,8 @@ static void arm_gic_common_reset(DeviceState *dev)
         s->ctrl[i] = 0;
     }
     for (i = 0; i < GIC_NR_SGIS; i++) {
-        GIC_SET_ENABLED(i, ALL_CPU_MASK);
-        GIC_SET_EDGE_TRIGGER(i);
+        GIC_DIST_SET_ENABLED(i, ALL_CPU_MASK);
+        GIC_DIST_SET_EDGE_TRIGGER(i);
     }
     if (s->num_cpu == 1) {
         /* For uniprocessor GICs all interrupts always target the sole CPU */

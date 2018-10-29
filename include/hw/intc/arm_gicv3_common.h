@@ -35,6 +35,8 @@
 #define GICV3_MAXIRQ 1020
 #define GICV3_MAXSPI (GICV3_MAXIRQ - GIC_INTERNAL)
 
+#define GICV3_REDIST_SIZE 0x20000
+
 /* Number of SGI target-list bits */
 #define GICV3_TARGETLIST_BITS 16
 

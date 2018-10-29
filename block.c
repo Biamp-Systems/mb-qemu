@@ -27,6 +27,7 @@
 #include "block/block_int.h"
 #include "block/blockjob.h"
 #include "block/nbd.h"
+#include "block/qdict.h"
 #include "qemu/error-report.h"
 #include "module_block.h"
 #include "qemu/module.h"
@@ -331,6 +332,10 @@ BlockDriverState *bdrv_new(void)
     bs->aio_context = qemu_get_aio_context();
 
     qemu_co_queue_init(&bs->flush_queue);
+
+    for (i = 0; i < bdrv_drain_all_count; i++) {
+        bdrv_drained_begin(bs);
+    }
 
     QTAILQ_INSERT_TAIL(&all_bdrv_states, bs, bs_list);
 
@@ -720,7 +725,7 @@ static int find_image_format(BlockBackend *file, const char *filename,
  * Set the current 'total_sectors' value
  * Return 0 on success, -errno on error.
  */
-static int refresh_total_sectors(BlockDriverState *bs, int64_t hint)
+int refresh_total_sectors(BlockDriverState *bs, int64_t hint)
 {
     BlockDriver *drv = bs->drv;
 
@@ -757,6 +762,31 @@ static void bdrv_join_options(BlockDriverState *bs, QDict *options,
     } else {
         qdict_join(options, old_options, false);
     }
+}
+
+static BlockdevDetectZeroesOptions bdrv_parse_detect_zeroes(QemuOpts *opts,
+                                                            int open_flags,
+                                                            Error **errp)
+{
+    Error *local_err = NULL;
+    char *value = qemu_opt_get_del(opts, "detect-zeroes");
+    BlockdevDetectZeroesOptions detect_zeroes =
+        qapi_enum_parse(&BlockdevDetectZeroesOptions_lookup, value,
+                        BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF, &local_err);
+    g_free(value);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return detect_zeroes;
+    }
+
+    if (detect_zeroes == BLOCKDEV_DETECT_ZEROES_OPTIONS_UNMAP &&
+        !(open_flags & BDRV_O_UNMAP))
+    {
+        error_setg(errp, "setting detect-zeroes to unmap is not allowed "
+                   "without setting discard operation to unmap");
+    }
+
+    return detect_zeroes;
 }
 
 /**
@@ -817,7 +847,13 @@ static char *bdrv_child_get_parent_desc(BdrvChild *c)
 static void bdrv_child_cb_drained_begin(BdrvChild *child)
 {
     BlockDriverState *bs = child->opaque;
-    bdrv_drained_begin(bs);
+    bdrv_do_drained_begin_quiesce(bs, NULL, false);
+}
+
+static bool bdrv_child_cb_drained_poll(BdrvChild *child)
+{
+    BlockDriverState *bs = child->opaque;
+    return bdrv_drain_poll(bs, false, NULL, false);
 }
 
 static void bdrv_child_cb_drained_end(BdrvChild *child)
@@ -901,9 +937,11 @@ static void bdrv_inherited_options(int *child_flags, QDict *child_options,
 }
 
 const BdrvChildRole child_file = {
+    .parent_is_bds   = true,
     .get_parent_desc = bdrv_child_get_parent_desc,
     .inherit_options = bdrv_inherited_options,
     .drained_begin   = bdrv_child_cb_drained_begin,
+    .drained_poll    = bdrv_child_cb_drained_poll,
     .drained_end     = bdrv_child_cb_drained_end,
     .attach          = bdrv_child_cb_attach,
     .detach          = bdrv_child_cb_detach,
@@ -925,9 +963,11 @@ static void bdrv_inherited_fmt_options(int *child_flags, QDict *child_options,
 }
 
 const BdrvChildRole child_format = {
+    .parent_is_bds   = true,
     .get_parent_desc = bdrv_child_get_parent_desc,
     .inherit_options = bdrv_inherited_fmt_options,
     .drained_begin   = bdrv_child_cb_drained_begin,
+    .drained_poll    = bdrv_child_cb_drained_poll,
     .drained_end     = bdrv_child_cb_drained_end,
     .attach          = bdrv_child_cb_attach,
     .detach          = bdrv_child_cb_detach,
@@ -1042,11 +1082,13 @@ static int bdrv_backing_update_filename(BdrvChild *c, BlockDriverState *base,
 }
 
 const BdrvChildRole child_backing = {
+    .parent_is_bds   = true,
     .get_parent_desc = bdrv_child_get_parent_desc,
     .attach          = bdrv_backing_attach,
     .detach          = bdrv_backing_detach,
     .inherit_options = bdrv_backing_options,
     .drained_begin   = bdrv_child_cb_drained_begin,
+    .drained_poll    = bdrv_child_cb_drained_poll,
     .drained_end     = bdrv_child_cb_drained_end,
     .inactivate      = bdrv_child_cb_inactivate,
     .update_filename = bdrv_backing_update_filename,
@@ -1077,19 +1119,19 @@ static void update_flags_from_options(int *flags, QemuOpts *opts)
     *flags &= ~BDRV_O_CACHE_MASK;
 
     assert(qemu_opt_find(opts, BDRV_OPT_CACHE_NO_FLUSH));
-    if (qemu_opt_get_bool(opts, BDRV_OPT_CACHE_NO_FLUSH, false)) {
+    if (qemu_opt_get_bool_del(opts, BDRV_OPT_CACHE_NO_FLUSH, false)) {
         *flags |= BDRV_O_NO_FLUSH;
     }
 
     assert(qemu_opt_find(opts, BDRV_OPT_CACHE_DIRECT));
-    if (qemu_opt_get_bool(opts, BDRV_OPT_CACHE_DIRECT, false)) {
+    if (qemu_opt_get_bool_del(opts, BDRV_OPT_CACHE_DIRECT, false)) {
         *flags |= BDRV_O_NOCACHE;
     }
 
     *flags &= ~BDRV_O_RDWR;
 
     assert(qemu_opt_find(opts, BDRV_OPT_READ_ONLY));
-    if (!qemu_opt_get_bool(opts, BDRV_OPT_READ_ONLY, false)) {
+    if (!qemu_opt_get_bool_del(opts, BDRV_OPT_READ_ONLY, false)) {
         *flags |= BDRV_O_RDWR;
     }
 
@@ -1139,6 +1181,12 @@ static void bdrv_assign_node_name(BlockDriverState *bs,
         goto out;
     }
 
+    /* Make sure that the node name isn't truncated */
+    if (strlen(node_name) >= sizeof(bs->node_name)) {
+        error_setg(errp, "Node name too long");
+        goto out;
+    }
+
     /* copy node name into the bs and insert it into the graph list */
     pstrcpy(bs->node_name, sizeof(bs->node_name), node_name);
     QTAILQ_INSERT_TAIL(&graph_bdrv_states, bs, node_list);
@@ -1151,7 +1199,7 @@ static int bdrv_open_driver(BlockDriverState *bs, BlockDriver *drv,
                             int open_flags, Error **errp)
 {
     Error *local_err = NULL;
-    int ret;
+    int i, ret;
 
     bdrv_assign_node_name(bs, node_name, &local_err);
     if (local_err) {
@@ -1199,6 +1247,12 @@ static int bdrv_open_driver(BlockDriverState *bs, BlockDriver *drv,
     assert(bdrv_min_mem_align(bs) != 0);
     assert(is_power_of_2(bs->bl.request_alignment));
 
+    for (i = 0; i < bs->quiesce_counter; i++) {
+        if (drv->bdrv_co_drain_begin) {
+            drv->bdrv_co_drain_begin(bs);
+        }
+    }
+
     return 0;
 open_failed:
     bs->drv = NULL;
@@ -1227,9 +1281,9 @@ BlockDriverState *bdrv_new_open_driver(BlockDriver *drv, const char *node_name,
 
     ret = bdrv_open_driver(bs, drv, node_name, bs->options, flags, errp);
     if (ret < 0) {
-        QDECREF(bs->explicit_options);
+        qobject_unref(bs->explicit_options);
         bs->explicit_options = NULL;
-        QDECREF(bs->options);
+        qobject_unref(bs->options);
         bs->options = NULL;
         bdrv_unref(bs);
         return NULL;
@@ -1299,7 +1353,6 @@ static int bdrv_open_common(BlockDriverState *bs, BlockBackend *file,
     const char *driver_name = NULL;
     const char *node_name = NULL;
     const char *discard;
-    const char *detect_zeroes;
     QemuOpts *opts;
     BlockDriver *drv;
     Error *local_err = NULL;
@@ -1388,29 +1441,12 @@ static int bdrv_open_common(BlockDriverState *bs, BlockBackend *file,
         }
     }
 
-    detect_zeroes = qemu_opt_get(opts, "detect-zeroes");
-    if (detect_zeroes) {
-        BlockdevDetectZeroesOptions value =
-            qapi_enum_parse(&BlockdevDetectZeroesOptions_lookup,
-                            detect_zeroes,
-                            BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF,
-                            &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            ret = -EINVAL;
-            goto fail_opts;
-        }
-
-        if (value == BLOCKDEV_DETECT_ZEROES_OPTIONS_UNMAP &&
-            !(bs->open_flags & BDRV_O_UNMAP))
-        {
-            error_setg(errp, "setting detect-zeroes to unmap is not allowed "
-                             "without setting discard operation to unmap");
-            ret = -EINVAL;
-            goto fail_opts;
-        }
-
-        bs->detect_zeroes = value;
+    bs->detect_zeroes =
+        bdrv_parse_detect_zeroes(opts, bs->open_flags, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        ret = -EINVAL;
+        goto fail_opts;
     }
 
     if (filename != NULL) {
@@ -1449,18 +1485,13 @@ static QDict *parse_json_filename(const char *filename, Error **errp)
 
     options_obj = qobject_from_json(filename, errp);
     if (!options_obj) {
-        /* Work around qobject_from_json() lossage TODO fix that */
-        if (errp && !*errp) {
-            error_setg(errp, "Could not parse the JSON options");
-            return NULL;
-        }
         error_prepend(errp, "Could not parse the JSON options: ");
         return NULL;
     }
 
     options = qobject_to(QDict, options_obj);
     if (!options) {
-        qobject_decref(options_obj);
+        qobject_unref(options_obj);
         error_setg(errp, "Invalid JSON object given");
         return NULL;
     }
@@ -1490,7 +1521,7 @@ static void parse_json_protocol(QDict *options, const char **pfilename,
     /* Options given in the filename have lower priority than options
      * specified directly */
     qdict_join(options, json_options, false);
-    QDECREF(json_options);
+    qobject_unref(json_options);
     *pfilename = NULL;
 }
 
@@ -1620,11 +1651,22 @@ static int bdrv_reopen_get_flags(BlockReopenQueue *q, BlockDriverState *bs)
 
 /* Returns whether the image file can be written to after the reopen queue @q
  * has been successfully applied, or right now if @q is NULL. */
-static bool bdrv_is_writable(BlockDriverState *bs, BlockReopenQueue *q)
+static bool bdrv_is_writable_after_reopen(BlockDriverState *bs,
+                                          BlockReopenQueue *q)
 {
     int flags = bdrv_reopen_get_flags(q, bs);
 
     return (flags & (BDRV_O_RDWR | BDRV_O_INACTIVE)) == BDRV_O_RDWR;
+}
+
+/*
+ * Return whether the BDS can be written to.  This is not necessarily
+ * the same as !bdrv_is_read_only(bs), as inactivated images may not
+ * be written to but do not count as read-only images.
+ */
+bool bdrv_is_writable(BlockDriverState *bs)
+{
+    return bdrv_is_writable_after_reopen(bs, NULL);
 }
 
 static void bdrv_child_perm(BlockDriverState *bs, BlockDriverState *child_bs,
@@ -1664,7 +1706,7 @@ static int bdrv_check_perm(BlockDriverState *bs, BlockReopenQueue *q,
 
     /* Write permissions never work with read-only images */
     if ((cumulative_perms & (BLK_PERM_WRITE | BLK_PERM_WRITE_UNCHANGED)) &&
-        !bdrv_is_writable(bs, q))
+        !bdrv_is_writable_after_reopen(bs, q))
     {
         error_setg(errp, "Block node is read-only");
         return -EPERM;
@@ -1914,12 +1956,6 @@ int bdrv_child_try_set_perm(BdrvChild *c, uint64_t perm, uint64_t shared,
     return 0;
 }
 
-#define DEFAULT_PERM_PASSTHROUGH (BLK_PERM_CONSISTENT_READ \
-                                 | BLK_PERM_WRITE \
-                                 | BLK_PERM_WRITE_UNCHANGED \
-                                 | BLK_PERM_RESIZE)
-#define DEFAULT_PERM_UNCHANGED (BLK_PERM_ALL & ~DEFAULT_PERM_PASSTHROUGH)
-
 void bdrv_filter_default_perms(BlockDriverState *bs, BdrvChild *c,
                                const BdrvChildRole *role,
                                BlockReopenQueue *reopen_queue,
@@ -1956,7 +1992,7 @@ void bdrv_format_default_perms(BlockDriverState *bs, BdrvChild *c,
                                   &perm, &shared);
 
         /* Format drivers may touch metadata even if the guest doesn't write */
-        if (bdrv_is_writable(bs, reopen_queue)) {
+        if (bdrv_is_writable_after_reopen(bs, reopen_queue)) {
             perm |= BLK_PERM_WRITE | BLK_PERM_RESIZE;
         }
 
@@ -2009,7 +2045,12 @@ static void bdrv_replace_child_noperm(BdrvChild *child,
             child->role->detach(child);
         }
         if (old_bs->quiesce_counter && child->role->drained_end) {
-            for (i = 0; i < old_bs->quiesce_counter; i++) {
+            int num = old_bs->quiesce_counter;
+            if (child->role->parent_is_bds) {
+                num -= bdrv_drain_all_count;
+            }
+            assert(num >= 0);
+            for (i = 0; i < num; i++) {
                 child->role->drained_end(child);
             }
         }
@@ -2021,8 +2062,13 @@ static void bdrv_replace_child_noperm(BdrvChild *child,
     if (new_bs) {
         QLIST_INSERT_HEAD(&new_bs->parents, child, next_parent);
         if (new_bs->quiesce_counter && child->role->drained_begin) {
-            for (i = 0; i < new_bs->quiesce_counter; i++) {
-                child->role->drained_begin(child);
+            int num = new_bs->quiesce_counter;
+            if (child->role->parent_is_bds) {
+                num -= bdrv_drain_all_count;
+            }
+            assert(num >= 0);
+            for (i = 0; i < num; i++) {
+                bdrv_parent_drained_begin_single(child, true);
             }
         }
 
@@ -2182,16 +2228,6 @@ static void bdrv_parent_cb_change_media(BlockDriverState *bs, bool load)
     }
 }
 
-static void bdrv_parent_cb_resize(BlockDriverState *bs)
-{
-    BdrvChild *c;
-    QLIST_FOREACH(c, &bs->parents, next_parent) {
-        if (c->role->resize) {
-            c->role->resize(c);
-        }
-    }
-}
-
 /*
  * Sets the backing file link of a BDS. A new reference is created; callers
  * which don't need their own reference any more must call bdrv_unref().
@@ -2273,7 +2309,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *parent_options,
     if (reference || qdict_haskey(options, "file.filename")) {
         backing_filename[0] = '\0';
     } else if (bs->backing_file[0] == '\0' && qdict_size(options) == 0) {
-        QDECREF(options);
+        qobject_unref(options);
         goto free_exit;
     } else {
         bdrv_get_full_backing_filename(bs, backing_filename, PATH_MAX,
@@ -2281,7 +2317,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *parent_options,
         if (local_err) {
             ret = -EINVAL;
             error_propagate(errp, local_err);
-            QDECREF(options);
+            qobject_unref(options);
             goto free_exit;
         }
     }
@@ -2289,7 +2325,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *parent_options,
     if (!bs->drv || !bs->drv->supports_backing) {
         ret = -EINVAL;
         error_setg(errp, "Driver doesn't support backing files");
-        QDECREF(options);
+        qobject_unref(options);
         goto free_exit;
     }
 
@@ -2323,7 +2359,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *parent_options,
 
 free_exit:
     g_free(backing_filename);
-    QDECREF(tmp_parent_options);
+    qobject_unref(tmp_parent_options);
     return ret;
 }
 
@@ -2356,7 +2392,7 @@ bdrv_open_child_bs(const char *filename, QDict *options, const char *bdref_key,
             error_setg(errp, "A block device must be specified for \"%s\"",
                        bdref_key);
         }
-        QDECREF(image_options);
+        qobject_unref(image_options);
         goto done;
     }
 
@@ -2449,7 +2485,7 @@ BlockDriverState *bdrv_open_blockdev_ref(BlockdevRef *ref, Error **errp)
     obj = NULL;
 
 fail:
-    qobject_decref(obj);
+    qobject_unref(obj);
     visit_free(v);
     return bs;
 }
@@ -2519,7 +2555,7 @@ static BlockDriverState *bdrv_append_temp_snapshot(BlockDriverState *bs,
     }
 
 out:
-    QDECREF(snapshot_options);
+    qobject_unref(snapshot_options);
     g_free(tmp_filename);
     return bs_snapshot;
 }
@@ -2530,7 +2566,7 @@ out:
  * options is a QDict of options to pass to the block drivers, or NULL for an
  * empty set of options. The reference to the QDict belongs to the block layer
  * after the call (even on failure), so if the caller intends to reuse the
- * dictionary, it needs to use QINCREF() before calling bdrv_open.
+ * dictionary, it needs to use qobject_ref() before calling bdrv_open.
  *
  * If *pbs is NULL, a new BDS will be created with a pointer to it stored there.
  * If it is not NULL, the referenced BDS will be reused.
@@ -2550,6 +2586,7 @@ static BlockDriverState *bdrv_open_inherit(const char *filename,
     BlockBackend *file = NULL;
     BlockDriverState *bs;
     BlockDriver *drv = NULL;
+    BdrvChild *child;
     const char *drvname;
     const char *backing;
     Error *local_err = NULL;
@@ -2561,7 +2598,7 @@ static BlockDriverState *bdrv_open_inherit(const char *filename,
 
     if (reference) {
         bool options_non_empty = options ? qdict_size(options) : false;
-        QDECREF(options);
+        qobject_unref(options);
 
         if (filename || options_non_empty) {
             error_setg(errp, "Cannot reference an existing block device with "
@@ -2733,6 +2770,18 @@ static BlockDriverState *bdrv_open_inherit(const char *filename,
         }
     }
 
+    /* Remove all children options and references
+     * from bs->options and bs->explicit_options */
+    QLIST_FOREACH(child, &bs->children, next) {
+        char *child_key_dot;
+        child_key_dot = g_strdup_printf("%s.", child->name);
+        qdict_extract_subqdict(bs->explicit_options, NULL, child_key_dot);
+        qdict_extract_subqdict(bs->options, NULL, child_key_dot);
+        qdict_del(bs->explicit_options, child->name);
+        qdict_del(bs->options, child->name);
+        g_free(child_key_dot);
+    }
+
     bdrv_refresh_filename(bs);
 
     /* Check if any unknown options were used */
@@ -2752,7 +2801,8 @@ static BlockDriverState *bdrv_open_inherit(const char *filename,
 
     bdrv_parent_cb_change_media(bs, true);
 
-    QDECREF(options);
+    qobject_unref(options);
+    options = NULL;
 
     /* For snapshot=on, create a temporary qcow2 overlay. bs points to the
      * temporary snapshot afterwards. */
@@ -2776,10 +2826,10 @@ static BlockDriverState *bdrv_open_inherit(const char *filename,
 
 fail:
     blk_unref(file);
-    QDECREF(snapshot_options);
-    QDECREF(bs->explicit_options);
-    QDECREF(bs->options);
-    QDECREF(options);
+    qobject_unref(snapshot_options);
+    qobject_unref(bs->explicit_options);
+    qobject_unref(bs->options);
+    qobject_unref(options);
     bs->options = NULL;
     bs->explicit_options = NULL;
     bdrv_unref(bs);
@@ -2788,8 +2838,8 @@ fail:
 
 close_and_fail:
     bdrv_unref(bs);
-    QDECREF(snapshot_options);
-    QDECREF(options);
+    qobject_unref(snapshot_options);
+    qobject_unref(options);
     error_propagate(errp, local_err);
     return NULL;
 }
@@ -2884,7 +2934,7 @@ static BlockReopenQueue *bdrv_reopen_queue_child(BlockReopenQueue *bs_queue,
         old_options = qdict_clone_shallow(bs->explicit_options);
     }
     bdrv_join_options(bs, options, old_options);
-    QDECREF(old_options);
+    qobject_unref(old_options);
 
     explicit_options = qdict_clone_shallow(options);
 
@@ -2899,13 +2949,13 @@ static BlockReopenQueue *bdrv_reopen_queue_child(BlockReopenQueue *bs_queue,
         qemu_opts_absorb_qdict(opts, options_copy, NULL);
         update_flags_from_options(&flags, opts);
         qemu_opts_del(opts);
-        QDECREF(options_copy);
+        qobject_unref(options_copy);
     }
 
     /* Old values are used for options that aren't set yet */
     old_options = qdict_clone_shallow(bs->options);
     bdrv_join_options(bs, options, old_options);
-    QDECREF(old_options);
+    qobject_unref(old_options);
 
     /* bdrv_open_inherit() sets and clears some additional flags internally */
     flags &= ~BDRV_O_PROTOCOL;
@@ -2917,8 +2967,8 @@ static BlockReopenQueue *bdrv_reopen_queue_child(BlockReopenQueue *bs_queue,
         bs_entry = g_new0(BlockReopenQueueEntry, 1);
         QSIMPLEQ_INSERT_TAIL(bs_queue, bs_entry, entry);
     } else {
-        QDECREF(bs_entry->state.options);
-        QDECREF(bs_entry->state.explicit_options);
+        qobject_unref(bs_entry->state.options);
+        qobject_unref(bs_entry->state.explicit_options);
     }
 
     bs_entry->state.bs = bs;
@@ -2942,6 +2992,7 @@ static BlockReopenQueue *bdrv_reopen_queue_child(BlockReopenQueue *bs_queue,
         }
 
         child_key_dot = g_strdup_printf("%s.", child->name);
+        qdict_extract_subqdict(explicit_options, NULL, child_key_dot);
         qdict_extract_subqdict(options, &new_child_options, child_key_dot);
         g_free(child_key_dot);
 
@@ -2968,7 +3019,7 @@ BlockReopenQueue *bdrv_reopen_queue(BlockReopenQueue *bs_queue,
  *
  * Reopens all BDS specified in the queue, with the appropriate
  * flags.  All devices are prepared for reopen, and failure of any
- * device will cause all device changes to be abandonded, and intermediate
+ * device will cause all device changes to be abandoned, and intermediate
  * data cleaned up.
  *
  * If all devices prepare successfully, then the changes are committed
@@ -3005,12 +3056,13 @@ int bdrv_reopen_multiple(AioContext *ctx, BlockReopenQueue *bs_queue, Error **er
 
 cleanup:
     QSIMPLEQ_FOREACH_SAFE(bs_entry, bs_queue, entry, next) {
-        if (ret && bs_entry->prepared) {
-            bdrv_reopen_abort(&bs_entry->state);
-        } else if (ret) {
-            QDECREF(bs_entry->state.explicit_options);
+        if (ret) {
+            if (bs_entry->prepared) {
+                bdrv_reopen_abort(&bs_entry->state);
+            }
+            qobject_unref(bs_entry->state.explicit_options);
+            qobject_unref(bs_entry->state.options);
         }
-        QDECREF(bs_entry->state.options);
         g_free(bs_entry);
     }
     g_free(bs_queue);
@@ -3110,12 +3162,18 @@ int bdrv_reopen_prepare(BDRVReopenState *reopen_state, BlockReopenQueue *queue,
     Error *local_err = NULL;
     BlockDriver *drv;
     QemuOpts *opts;
-    const char *value;
+    QDict *orig_reopen_opts;
+    char *discard = NULL;
     bool read_only;
 
     assert(reopen_state != NULL);
     assert(reopen_state->bs->drv != NULL);
     drv = reopen_state->bs->drv;
+
+    /* This function and each driver's bdrv_reopen_prepare() remove
+     * entries from reopen_state->options as they are processed, so
+     * we need to make a copy of the original QDict. */
+    orig_reopen_opts = qdict_clone_shallow(reopen_state->options);
 
     /* Process generic block layer options */
     opts = qemu_opts_create(&bdrv_runtime_opts, NULL, 0, &error_abort);
@@ -3128,17 +3186,27 @@ int bdrv_reopen_prepare(BDRVReopenState *reopen_state, BlockReopenQueue *queue,
 
     update_flags_from_options(&reopen_state->flags, opts);
 
-    /* node-name and driver must be unchanged. Put them back into the QDict, so
-     * that they are checked at the end of this function. */
-    value = qemu_opt_get(opts, "node-name");
-    if (value) {
-        qdict_put_str(reopen_state->options, "node-name", value);
+    discard = qemu_opt_get_del(opts, "discard");
+    if (discard != NULL) {
+        if (bdrv_parse_discard_flags(discard, &reopen_state->flags) != 0) {
+            error_setg(errp, "Invalid discard option");
+            ret = -EINVAL;
+            goto error;
+        }
     }
 
-    value = qemu_opt_get(opts, "driver");
-    if (value) {
-        qdict_put_str(reopen_state->options, "driver", value);
+    reopen_state->detect_zeroes =
+        bdrv_parse_detect_zeroes(opts, reopen_state->flags, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        ret = -EINVAL;
+        goto error;
     }
+
+    /* All other options (including node-name and driver) must be unchanged.
+     * Put them back into the QDict, so that they are checked at the end
+     * of this function. */
+    qemu_opts_to_qdict(opts, reopen_state->options);
 
     /* If we are to stay read-only, do not allow permission change
      * to r/w. Attempting to set to r/w may fail if either BDRV_O_ALLOW_RDWR is
@@ -3191,6 +3259,24 @@ int bdrv_reopen_prepare(BDRVReopenState *reopen_state, BlockReopenQueue *queue,
             QObject *new = entry->value;
             QObject *old = qdict_get(reopen_state->bs->options, entry->key);
 
+            /* Allow child references (child_name=node_name) as long as they
+             * point to the current child (i.e. everything stays the same). */
+            if (qobject_type(new) == QTYPE_QSTRING) {
+                BdrvChild *child;
+                QLIST_FOREACH(child, &reopen_state->bs->children, next) {
+                    if (!strcmp(child->name, entry->key)) {
+                        break;
+                    }
+                }
+
+                if (child) {
+                    const char *str = qobject_get_try_str(new);
+                    if (!strcmp(child->bs->node_name, str)) {
+                        continue; /* Found child with this name, skip option */
+                    }
+                }
+            }
+
             /*
              * TODO: When using -drive to specify blockdev options, all values
              * will be strings; however, when using -blockdev, blockdev-add or
@@ -3223,8 +3309,14 @@ int bdrv_reopen_prepare(BDRVReopenState *reopen_state, BlockReopenQueue *queue,
 
     ret = 0;
 
+    /* Restore the original reopen_state->options QDict */
+    qobject_unref(reopen_state->options);
+    reopen_state->options = qobject_ref(orig_reopen_opts);
+
 error:
     qemu_opts_del(opts);
+    qobject_unref(orig_reopen_opts);
+    g_free(discard);
     return ret;
 }
 
@@ -3237,6 +3329,7 @@ void bdrv_reopen_commit(BDRVReopenState *reopen_state)
 {
     BlockDriver *drv;
     BlockDriverState *bs;
+    BdrvChild *child;
     bool old_can_write, new_can_write;
 
     assert(reopen_state != NULL);
@@ -3253,11 +3346,21 @@ void bdrv_reopen_commit(BDRVReopenState *reopen_state)
     }
 
     /* set BDS specific flags now */
-    QDECREF(bs->explicit_options);
+    qobject_unref(bs->explicit_options);
+    qobject_unref(bs->options);
 
     bs->explicit_options   = reopen_state->explicit_options;
+    bs->options            = reopen_state->options;
     bs->open_flags         = reopen_state->flags;
     bs->read_only = !(reopen_state->flags & BDRV_O_RDWR);
+    bs->detect_zeroes      = reopen_state->detect_zeroes;
+
+    /* Remove child references from bs->options and bs->explicit_options.
+     * Child options were already removed in bdrv_reopen_queue_child() */
+    QLIST_FOREACH(child, &bs->children, next) {
+        qdict_del(bs->explicit_options, child->name);
+        qdict_del(bs->options, child->name);
+    }
 
     bdrv_refresh_limits(bs, NULL);
 
@@ -3296,8 +3399,6 @@ void bdrv_reopen_abort(BDRVReopenState *reopen_state)
         drv->bdrv_reopen_abort(reopen_state);
     }
 
-    QDECREF(reopen_state->explicit_options);
-
     bdrv_abort_perm_update(reopen_state->bs);
 }
 
@@ -3315,7 +3416,9 @@ static void bdrv_close(BlockDriverState *bs)
     bdrv_drain(bs); /* in case flush left pending I/O */
 
     if (bs->drv) {
-        bs->drv->bdrv_close(bs);
+        if (bs->drv->bdrv_close) {
+            bs->drv->bdrv_close(bs);
+        }
         bs->drv = NULL;
     }
 
@@ -3343,11 +3446,11 @@ static void bdrv_close(BlockDriverState *bs)
     bs->total_sectors = 0;
     bs->encrypted = false;
     bs->sg = false;
-    QDECREF(bs->options);
-    QDECREF(bs->explicit_options);
+    qobject_unref(bs->options);
+    qobject_unref(bs->explicit_options);
     bs->options = NULL;
     bs->explicit_options = NULL;
-    QDECREF(bs->full_open_options);
+    qobject_unref(bs->full_open_options);
     bs->full_open_options = NULL;
 
     bdrv_release_named_dirty_bitmaps(bs);
@@ -3362,7 +3465,7 @@ static void bdrv_close(BlockDriverState *bs)
 
 void bdrv_close_all(void)
 {
-    block_job_cancel_sync_all();
+    assert(job_next(NULL) == NULL);
     nbd_export_close_all();
 
     /* Drop references from requests still in flight, such as canceled block
@@ -3383,16 +3486,39 @@ static bool should_update_child(BdrvChild *c, BlockDriverState *to)
         return false;
     }
 
-    if (c->role == &child_backing) {
-        /* If @from is a backing file of @to, ignore the child to avoid
-         * creating a loop. We only want to change the pointer of other
-         * parents. */
-        QLIST_FOREACH(to_c, &to->children, next) {
-            if (to_c == c) {
-                break;
-            }
-        }
-        if (to_c) {
+    /* If the child @c belongs to the BDS @to, replacing the current
+     * c->bs by @to would mean to create a loop.
+     *
+     * Such a case occurs when appending a BDS to a backing chain.
+     * For instance, imagine the following chain:
+     *
+     *   guest device -> node A -> further backing chain...
+     *
+     * Now we create a new BDS B which we want to put on top of this
+     * chain, so we first attach A as its backing node:
+     *
+     *                   node B
+     *                     |
+     *                     v
+     *   guest device -> node A -> further backing chain...
+     *
+     * Finally we want to replace A by B.  When doing that, we want to
+     * replace all pointers to A by pointers to B -- except for the
+     * pointer from B because (1) that would create a loop, and (2)
+     * that pointer should simply stay intact:
+     *
+     *   guest device -> node B
+     *                     |
+     *                     v
+     *                   node A -> further backing chain...
+     *
+     * In general, when replacing a node A (c->bs) by a node B (@to),
+     * if A is a child of B, that means we cannot replace A by B there
+     * because that would create a loop.  Silently detaching A from B
+     * is also not really an option.  So overall just leaving A in
+     * place there is the most sensible choice. */
+    QLIST_FOREACH(to_c, &to->children, next) {
+        if (to_c == c) {
             return false;
         }
     }
@@ -3418,6 +3544,7 @@ void bdrv_replace_node(BlockDriverState *from, BlockDriverState *to,
 
     /* Put all parents into @list and calculate their cumulative permissions */
     QLIST_FOREACH_SAFE(c, &from->parents, next_parent, next) {
+        assert(c->bs == from);
         if (!should_update_child(c, to)) {
             continue;
         }
@@ -3718,58 +3845,6 @@ exit:
 }
 
 /**
- * Truncate file to 'offset' bytes (needed only for file protocols)
- */
-int bdrv_truncate(BdrvChild *child, int64_t offset, PreallocMode prealloc,
-                  Error **errp)
-{
-    BlockDriverState *bs = child->bs;
-    BlockDriver *drv = bs->drv;
-    int ret;
-
-    assert(child->perm & BLK_PERM_RESIZE);
-
-    /* if bs->drv == NULL, bs is closed, so there's nothing to do here */
-    if (!drv) {
-        error_setg(errp, "No medium inserted");
-        return -ENOMEDIUM;
-    }
-    if (offset < 0) {
-        error_setg(errp, "Image size cannot be negative");
-        return -EINVAL;
-    }
-
-    if (!drv->bdrv_truncate) {
-        if (bs->file && drv->is_filter) {
-            return bdrv_truncate(bs->file, offset, prealloc, errp);
-        }
-        error_setg(errp, "Image format driver does not support resize");
-        return -ENOTSUP;
-    }
-    if (bs->read_only) {
-        error_setg(errp, "Image is read-only");
-        return -EACCES;
-    }
-
-    assert(!(bs->open_flags & BDRV_O_INACTIVE));
-
-    ret = drv->bdrv_truncate(bs, offset, prealloc, errp);
-    if (ret < 0) {
-        return ret;
-    }
-    ret = refresh_total_sectors(bs, offset >> BDRV_SECTOR_BITS);
-    if (ret < 0) {
-        error_setg_errno(errp, -ret, "Could not refresh total sector count");
-    } else {
-        offset = bs->total_sectors * BDRV_SECTOR_SIZE;
-    }
-    bdrv_dirty_bitmap_truncate(bs, offset);
-    bdrv_parent_cb_resize(bs);
-    atomic_inc(&bs->write_gen);
-    return ret;
-}
-
-/**
  * Length of a allocated file in bytes. Sparse files are counted by actual
  * allocated space. Return < 0 if error or unknown.
  */
@@ -4023,6 +4098,14 @@ BlockDriverState *bdrv_next_node(BlockDriverState *bs)
         return QTAILQ_FIRST(&graph_bdrv_states);
     }
     return QTAILQ_NEXT(bs, node_list);
+}
+
+BlockDriverState *bdrv_next_all_states(BlockDriverState *bs)
+{
+    if (!bs) {
+        return QTAILQ_FIRST(&all_bdrv_states);
+    }
+    return QTAILQ_NEXT(bs, bs_list);
 }
 
 const char *bdrv_get_node_name(const BlockDriverState *bs)
@@ -4614,9 +4697,9 @@ bool bdrv_op_is_blocked(BlockDriverState *bs, BlockOpType op, Error **errp)
     assert((int) op >= 0 && op < BLOCK_OP_TYPE_MAX);
     if (!QLIST_EMPTY(&bs->op_blockers[op])) {
         blocker = QLIST_FIRST(&bs->op_blockers[op]);
-        error_propagate(errp, error_copy(blocker->reason));
-        error_prepend(errp, "Node '%s' is busy: ",
-                      bdrv_get_device_or_node_name(bs));
+        error_propagate_prepend(errp, error_copy(blocker->reason),
+                                "Node '%s' is busy: ",
+                                bdrv_get_device_or_node_name(bs));
         return true;
     }
     return false;
@@ -4720,9 +4803,6 @@ void bdrv_img_create(const char *filename, const char *fmt,
     if (options) {
         qemu_opts_do_parse(opts, options, NULL, &local_err);
         if (local_err) {
-            error_report_err(local_err);
-            local_err = NULL;
-            error_setg(errp, "Invalid options for file format '%s'", fmt);
             goto out;
         }
     }
@@ -4851,11 +4931,6 @@ AioContext *bdrv_get_aio_context(BlockDriverState *bs)
     return bs ? bs->aio_context : qemu_get_aio_context();
 }
 
-AioWait *bdrv_get_aio_wait(BlockDriverState *bs)
-{
-    return bs ? &bs->wait : NULL;
-}
-
 void bdrv_coroutine_enter(BlockDriverState *bs, Coroutine *co)
 {
     aio_co_enter(bdrv_get_aio_context(bs), co);
@@ -4936,7 +5011,7 @@ void bdrv_set_aio_context(BlockDriverState *bs, AioContext *new_context)
     AioContext *ctx = bdrv_get_aio_context(bs);
 
     aio_disable_external(ctx);
-    bdrv_parent_drained_begin(bs, NULL);
+    bdrv_parent_drained_begin(bs, NULL, false);
     bdrv_drain(bs); /* ensure there are no in-flight requests */
 
     while (aio_poll(ctx, false)) {
@@ -4950,7 +5025,7 @@ void bdrv_set_aio_context(BlockDriverState *bs, AioContext *new_context)
      */
     aio_context_acquire(new_context);
     bdrv_attach_aio_context(bs, new_context);
-    bdrv_parent_drained_end(bs, NULL);
+    bdrv_parent_drained_end(bs, NULL, false);
     aio_enable_external(ctx);
     aio_context_release(new_context);
 }
@@ -4996,15 +5071,19 @@ void bdrv_remove_aio_context_notifier(BlockDriverState *bs,
 }
 
 int bdrv_amend_options(BlockDriverState *bs, QemuOpts *opts,
-                       BlockDriverAmendStatusCB *status_cb, void *cb_opaque)
+                       BlockDriverAmendStatusCB *status_cb, void *cb_opaque,
+                       Error **errp)
 {
     if (!bs->drv) {
+        error_setg(errp, "Node is ejected");
         return -ENOMEDIUM;
     }
     if (!bs->drv->bdrv_amend_options) {
+        error_setg(errp, "Block driver '%s' does not support option amendment",
+                   bs->drv->format_name);
         return -ENOTSUP;
     }
-    return bs->drv->bdrv_amend_options(bs, opts, status_cb, cb_opaque);
+    return bs->drv->bdrv_amend_options(bs, opts, status_cb, cb_opaque, errp);
 }
 
 /* This function will be called by the bdrv_recurse_is_first_non_filter method
@@ -5105,26 +5184,12 @@ static bool append_open_options(QDict *d, BlockDriverState *bs)
 {
     const QDictEntry *entry;
     QemuOptDesc *desc;
-    BdrvChild *child;
     bool found_any = false;
-    const char *p;
 
     for (entry = qdict_first(bs->options); entry;
          entry = qdict_next(bs->options, entry))
     {
-        /* Exclude options for children */
-        QLIST_FOREACH(child, &bs->children, next) {
-            if (strstart(qdict_entry_key(entry), child->name, &p)
-                && (!*p || *p == '.'))
-            {
-                break;
-            }
-        }
-        if (child) {
-            continue;
-        }
-
-        /* And exclude all non-driver-specific options */
+        /* Exclude all non-driver-specific options */
         for (desc = bdrv_runtime_opts.desc; desc->name; desc++) {
             if (!strcmp(qdict_entry_key(entry), desc->name)) {
                 break;
@@ -5134,8 +5199,8 @@ static bool append_open_options(QDict *d, BlockDriverState *bs)
             continue;
         }
 
-        qobject_incref(qdict_entry_value(entry));
-        qdict_put_obj(d, qdict_entry_key(entry), qdict_entry_value(entry));
+        qdict_put_obj(d, qdict_entry_key(entry),
+                      qobject_ref(qdict_entry_value(entry)));
         found_any = true;
     }
 
@@ -5174,21 +5239,21 @@ void bdrv_refresh_filename(BlockDriverState *bs)
          * information before refreshing it */
         bs->exact_filename[0] = '\0';
         if (bs->full_open_options) {
-            QDECREF(bs->full_open_options);
+            qobject_unref(bs->full_open_options);
             bs->full_open_options = NULL;
         }
 
         opts = qdict_new();
         append_open_options(opts, bs);
         drv->bdrv_refresh_filename(bs, opts);
-        QDECREF(opts);
+        qobject_unref(opts);
     } else if (bs->file) {
         /* Try to reconstruct valid information from the underlying file */
         bool has_open_options;
 
         bs->exact_filename[0] = '\0';
         if (bs->full_open_options) {
-            QDECREF(bs->full_open_options);
+            qobject_unref(bs->full_open_options);
             bs->full_open_options = NULL;
         }
 
@@ -5207,12 +5272,12 @@ void bdrv_refresh_filename(BlockDriverState *bs)
          * suffices without querying the (exact_)filename of this BDS. */
         if (bs->file->bs->full_open_options) {
             qdict_put_str(opts, "driver", drv->format_name);
-            QINCREF(bs->file->bs->full_open_options);
-            qdict_put(opts, "file", bs->file->bs->full_open_options);
+            qdict_put(opts, "file",
+                      qobject_ref(bs->file->bs->full_open_options));
 
             bs->full_open_options = opts;
         } else {
-            QDECREF(opts);
+            qobject_unref(opts);
         }
     } else if (!bs->full_open_options && qdict_size(bs->options)) {
         /* There is no underlying file BDS (at least referenced by BDS.file),
@@ -5246,7 +5311,7 @@ void bdrv_refresh_filename(BlockDriverState *bs)
         QString *json = qobject_to_json(QOBJECT(bs->full_open_options));
         snprintf(bs->filename, sizeof(bs->filename), "json:%s",
                  qstring_get_str(json));
-        QDECREF(json);
+        qobject_unref(json);
     }
 }
 

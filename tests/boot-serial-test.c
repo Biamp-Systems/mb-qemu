@@ -75,14 +75,12 @@ typedef struct testdef {
 static testdef_t tests[] = {
     { "alpha", "clipper", "", "PCI:" },
     { "ppc", "ppce500", "", "U-Boot" },
-    { "ppc", "prep", "-m 96", "Memory size: 96 MB" },
-    { "ppc", "40p", "-boot d", "Booting from device d" },
+    { "ppc", "40p", "-vga none -boot d", "Trying cd:," },
     { "ppc", "g3beige", "", "PowerPC,750" },
     { "ppc", "mac99", "", "PowerPC,G4" },
     { "ppc", "sam460ex", "-m 256", "DRAM:  256 MiB" },
     { "ppc64", "ppce500", "", "U-Boot" },
-    { "ppc64", "prep", "-boot e", "Booting from device e" },
-    { "ppc64", "40p", "-m 192", "Memory size: 192 MB" },
+    { "ppc64", "40p", "-m 192", "Memory: 192M" },
     { "ppc64", "mac99", "", "PowerPC,970FX" },
     { "ppc64", "pseries", "", "Open Firmware" },
     { "ppc64", "powernv", "-cpu POWER8", "OPAL" },
@@ -96,8 +94,7 @@ static testdef_t tests[] = {
     { "sparc", "SS-4", "", "MB86904" },
     { "sparc", "SS-600MP", "", "TMS390Z55" },
     { "sparc64", "sun4u", "", "UltraSPARC" },
-    { "s390x", "s390-ccw-virtio",
-      "-nodefaults -device sclpconsole,chardev=serial0", "virtio device" },
+    { "s390x", "s390-ccw-virtio", "", "virtio device" },
     { "m68k", "mcf5208evb", "", "TT", sizeof(kernel_mcf5208), kernel_mcf5208 },
     { "microblaze", "petalogix-s3adsp1800", "", "TT",
       sizeof(kernel_pls3adsp1800), kernel_pls3adsp1800 },
@@ -112,22 +109,20 @@ static testdef_t tests[] = {
     { NULL }
 };
 
-static void check_guest_output(const testdef_t *test, int fd)
+static bool check_guest_output(const testdef_t *test, int fd)
 {
-    bool output_ok = false;
     int i, nbr = 0, pos = 0, ccnt;
     char ch;
 
-    /* Poll serial output... Wait at most 60 seconds */
-    for (i = 0; i < 6000; ++i) {
+    /* Poll serial output... Wait at most 360 seconds */
+    for (i = 0; i < 36000; ++i) {
         ccnt = 0;
         while (ccnt++ < 512 && (nbr = read(fd, &ch, 1)) == 1) {
             if (ch == test->expect[pos]) {
                 pos += 1;
                 if (test->expect[pos] == '\0') {
                     /* We've reached the end of the expected string! */
-                    output_ok = true;
-                    goto done;
+                    return true;
                 }
             } else {
                 pos = 0;
@@ -137,8 +132,7 @@ static void check_guest_output(const testdef_t *test, int fd)
         g_usleep(10000);
     }
 
-done:
-    g_assert(output_ok);
+    return false;
 }
 
 static void test_machine(const void *data)
@@ -176,17 +170,21 @@ static void test_machine(const void *data)
      * Make sure that this test uses tcg if available: It is used as a
      * fast-enough smoketest for that.
      */
-    global_qtest = qtest_startf("%s %s -M %s,accel=tcg:kvm "
-                                "-chardev file,id=serial0,path=%s "
-                                "-no-shutdown -serial chardev:serial0 %s",
-                                codeparam, code ? codetmp : "",
-                                test->machine, serialtmp, test->extra);
-    unlink(serialtmp);
+    global_qtest = qtest_initf("%s %s -M %s,accel=tcg:kvm "
+                               "-chardev file,id=serial0,path=%s "
+                               "-no-shutdown -serial chardev:serial0 %s",
+                               codeparam, code ? codetmp : "",
+                               test->machine, serialtmp, test->extra);
     if (code) {
         unlink(codetmp);
     }
 
-    check_guest_output(test, ser_fd);
+    if (!check_guest_output(test, ser_fd)) {
+        g_error("Failed to find expected string. Please check '%s'",
+                serialtmp);
+    }
+    unlink(serialtmp);
+
     qtest_quit(global_qtest);
 
     close(ser_fd);

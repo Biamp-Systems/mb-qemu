@@ -272,10 +272,9 @@ static int si57x_event(I2CSlave *i2c, enum i2c_event event)
     return 0;
 }
 
-static int si57x_init(I2CSlave *i2c)
+static void si57x_realize(DeviceState *dev, Error **errp)
 {
     /* Nothing to do */
-    return 0;
 }
 
 static Property si57x_properties[] = {
@@ -289,10 +288,10 @@ static void si57x_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
-    k->init = si57x_init;
     k->event = si57x_event;
     k->recv = si57x_rx;
     k->send = si57x_tx;
+    dc->realize = si57x_realize;
     dc->props = si57x_properties;
     dc->reset = si57x_reset;
 }

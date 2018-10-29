@@ -852,12 +852,17 @@ static void xlnx_zynqmp_qspips_notify(void *opaque)
     {
         size_t ret;
         uint32_t num;
-        const void *rxd = pop_buf(recv_fifo, 4, &num);
+        const void *rxd;
+        int len;
+
+        len = recv_fifo->num >= rq->dma_burst_size ? rq->dma_burst_size :
+                                                   recv_fifo->num;
+        rxd = pop_buf(recv_fifo, len, &num);
 
         memcpy(rq->dma_buf, rxd, num);
 
-        ret = stream_push(rq->dma, rq->dma_buf, 4, 0);
-        assert(ret == 4);
+        ret = stream_push(rq->dma, rq->dma_buf, num, 0);
+        assert(ret == num);
         xlnx_zynqmp_qspips_check_flush(rq);
     }
 }
@@ -1027,14 +1032,6 @@ static const MemoryRegionOps spips_ops = {
 
 static void xilinx_qspips_invalidate_mmio_ptr(XilinxQSPIPS *q)
 {
-    XilinxSPIPS *s = &q->parent_obj;
-
-    if ((q->mmio_execution_enabled) && (q->lqspi_cached_addr != ~0ULL)) {
-        /* Invalidate the current mapped mmio */
-        memory_region_invalidate_mmio_ptr(&s->mmlqspi, q->lqspi_cached_addr,
-                                          LQSPI_CACHE_SIZE);
-    }
-
     q->lqspi_cached_addr = ~0ULL;
 }
 
@@ -1231,23 +1228,6 @@ static void lqspi_load_cache(void *opaque, hwaddr addr)
     }
 }
 
-static void *lqspi_request_mmio_ptr(void *opaque, hwaddr addr, unsigned *size,
-                                    unsigned *offset)
-{
-    XilinxQSPIPS *q = opaque;
-    hwaddr offset_within_the_region;
-
-    if (!q->mmio_execution_enabled) {
-        return NULL;
-    }
-
-    offset_within_the_region = addr & ~(LQSPI_CACHE_SIZE - 1);
-    lqspi_load_cache(opaque, offset_within_the_region);
-    *size = LQSPI_CACHE_SIZE;
-    *offset = offset_within_the_region;
-    return q->lqspi_buf;
-}
-
 static uint64_t
 lqspi_read(void *opaque, hwaddr addr, unsigned int size)
 {
@@ -1269,7 +1249,6 @@ lqspi_read(void *opaque, hwaddr addr, unsigned int size)
 
 static const MemoryRegionOps lqspi_ops = {
     .read = lqspi_read,
-    .request_ptr = lqspi_request_mmio_ptr,
     .endianness = DEVICE_NATIVE_ENDIAN,
     .valid = {
         .min_access_size = 1,
@@ -1346,15 +1325,6 @@ static void xilinx_qspips_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->mmlqspi);
 
     q->lqspi_cached_addr = ~0ULL;
-
-    /* mmio_execution breaks migration better aborting than having strange
-     * bugs.
-     */
-    if (q->mmio_execution_enabled) {
-        error_setg(&q->migration_blocker,
-                   "enabling mmio_execution breaks migration");
-        migrate_add_blocker(q->migration_blocker, &error_fatal);
-    }
 }
 
 static void xlnx_zynqmp_qspips_realize(DeviceState *dev, Error **errp)
@@ -1362,6 +1332,12 @@ static void xlnx_zynqmp_qspips_realize(DeviceState *dev, Error **errp)
     XlnxZynqMPQSPIPS *s = XLNX_ZYNQMP_QSPIPS(dev);
     XilinxSPIPSClass *xsc = XILINX_SPIPS_GET_CLASS(s);
 
+    if (s->dma_burst_size > QSPI_DMA_MAX_BURST_SIZE) {
+        error_setg(errp,
+                   "qspi dma burst size %u exceeds maximum limit %d",
+                   s->dma_burst_size, QSPI_DMA_MAX_BURST_SIZE);
+        return;
+    }
     xilinx_qspips_realize(dev, errp);
     fifo8_create(&s->rx_fifo_g, xsc->rx_fifo_size);
     fifo8_create(&s->tx_fifo_g, xsc->tx_fifo_size);
@@ -1375,7 +1351,7 @@ static void xlnx_zynqmp_qspips_init(Object *obj)
     object_property_add_link(obj, "stream-connected-dma", TYPE_STREAM_SLAVE,
                              (Object **)&rq->dma,
                              object_property_allow_set_link,
-                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             OBJ_PROP_LINK_STRONG,
                              NULL);
 }
 
@@ -1440,7 +1416,7 @@ static const VMStateDescription vmstate_xlnx_zynqmp_qspips = {
     }
 };
 
-static Property xilinx_qspips_properties[] = {
+static Property xilinx_zynqmp_qspips_properties[] = {
     DEFINE_PROP_UINT32("lqspi-size", XilinxQSPIPS, lqspi_size, 0),
     DEFINE_PROP_UINT32("lqspi-src", XilinxQSPIPS, lqspi_src, 0),
     DEFINE_PROP_UINT32("lqspi-dst", XilinxQSPIPS, lqspi_dst, 0),
@@ -1450,6 +1426,7 @@ static Property xilinx_qspips_properties[] = {
      */
     DEFINE_PROP_BOOL("x-mmio-exec", XilinxQSPIPS, mmio_execution_enabled,
                      false),
+    DEFINE_PROP_UINT32("dma-burst-size", XlnxZynqMPQSPIPS, dma_burst_size, 64),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1467,7 +1444,7 @@ static void xilinx_qspips_init(Object *obj)
     object_property_add_link(obj, "dma", TYPE_MEMORY_REGION,
                              (Object **) &q->hack_dma,
                              qdev_prop_allow_set_link_before_realize,
-                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             OBJ_PROP_LINK_STRONG,
                              &error_abort);
 }
 
@@ -1477,7 +1454,6 @@ static void xilinx_qspips_class_init(ObjectClass *klass, void * data)
     XilinxSPIPSClass *xsc = XILINX_SPIPS_CLASS(klass);
 
     dc->realize = xilinx_qspips_realize;
-    dc->props = xilinx_qspips_properties;
     xsc->reg_ops = &qspips_ops;
     xsc->rx_fifo_size = RXFF_A_Q;
     xsc->tx_fifo_size = TXFF_A_Q;
@@ -1506,6 +1482,7 @@ static void xlnx_zynqmp_qspips_class_init(ObjectClass *klass, void * data)
     dc->realize = xlnx_zynqmp_qspips_realize;
     dc->reset = xlnx_zynqmp_qspips_reset;
     dc->vmsd = &vmstate_xlnx_zynqmp_qspips;
+    dc->props = xilinx_zynqmp_qspips_properties;
     xsc->reg_ops = &xlnx_zynqmp_qspips_ops;
     xsc->rx_fifo_size = RXFF_A_Q;
     xsc->tx_fifo_size = TXFF_A_Q;

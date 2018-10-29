@@ -265,12 +265,11 @@ void gic_update(GICState *s)
         best_prio = 0x100;
         best_irq = 1023;
         for (irq = 0; irq < s->num_irq; irq++) {
-            if (GIC_TEST_ENABLED(irq, cm) && gic_test_pending(s, irq, cm) &&
-                (!GIC_TEST_ACTIVE(irq, cm)) &&
-                (irq < GIC_INTERNAL || GIC_TARGET(irq) & cm)) {
-                if (GIC_GET_PRIORITY(irq, cpu) < best_prio &&
-                    !is_apr(s, cpu, GIC_GET_PRIORITY(irq, cpu))) {
-                    best_prio = GIC_GET_PRIORITY(irq, cpu);
+            if (GIC_DIST_TEST_ENABLED(irq, cm) && gic_test_pending(s, irq, cm) &&
+                (irq < GIC_INTERNAL || GIC_DIST_TARGET(irq) & cm)) {
+                if (GIC_DIST_GET_PRIORITY(irq, cpu) < best_prio &&
+                    !is_apr(s, cpu, GIC_DIST_GET_PRIORITY(irq, cpu))) {
+                    best_prio = GIC_DIST_GET_PRIORITY(irq, cpu);
                     best_irq = irq;
                 }
             }
@@ -285,7 +284,7 @@ void gic_update(GICState *s)
         }
 
         if (best_irq < GIC_MAXIRQ) {
-            next_grp0 = GIC_GROUP(best_irq) == 0;
+            next_grp0 = !GIC_DIST_TEST_GROUP(best_irq, cm);
         }
         if (level) {
             if (next_grp0 && s->gicc_ctrl[cpu].fiq_en) {
@@ -314,7 +313,7 @@ void gic_set_pending_private(GICState *s, int cpu, int irq)
     }
 
     DPRINTF("Set %d pending cpu %d\n", irq, cpu);
-    GIC_SET_PENDING(irq, cm);
+    GIC_DIST_SET_PENDING(irq, cm);
     gic_update(s);
 }
 
@@ -322,13 +321,13 @@ static void gic_set_irq_11mpcore(GICState *s, int irq, int level,
                                  int cm, int target)
 {
     if (level) {
-        GIC_SET_LEVEL(irq, cm);
-        if (GIC_TEST_EDGE_TRIGGER(irq) || GIC_TEST_ENABLED(irq, cm)) {
+        GIC_DIST_SET_LEVEL(irq, cm);
+        if (GIC_DIST_TEST_EDGE_TRIGGER(irq) || GIC_DIST_TEST_ENABLED(irq, cm)) {
             DPRINTF("Set %d pending mask %x\n", irq, target);
-            GIC_SET_PENDING(irq, target);
+            GIC_DIST_SET_PENDING(irq, target);
         }
     } else {
-        GIC_CLEAR_LEVEL(irq, cm);
+        GIC_DIST_CLEAR_LEVEL(irq, cm);
     }
 }
 
@@ -336,13 +335,13 @@ static void gic_set_irq_generic(GICState *s, int irq, int level,
                                 int cm, int target)
 {
     if (level) {
-        GIC_SET_LEVEL(irq, cm);
+        GIC_DIST_SET_LEVEL(irq, cm);
         DPRINTF("Set %d pending mask %x\n", irq, target);
-        if (GIC_TEST_EDGE_TRIGGER(irq)) {
-            GIC_SET_PENDING(irq, target);
+        if (GIC_DIST_TEST_EDGE_TRIGGER(irq)) {
+            GIC_DIST_SET_PENDING(irq, target);
         }
     } else {
-        GIC_CLEAR_LEVEL(irq, cm);
+        GIC_DIST_CLEAR_LEVEL(irq, cm);
     }
 }
 
@@ -361,7 +360,7 @@ static void gic_set_irq(void *opaque, int irq, int level)
         /* The first external input line is internal interrupt 32.  */
         cm = ALL_CPU_MASK;
         irq += GIC_INTERNAL;
-        target = GIC_TARGET(irq);
+        target = GIC_DIST_TARGET(irq);
     } else {
         int cpu;
         irq -= (s->num_irq - GIC_INTERNAL);
@@ -373,7 +372,7 @@ static void gic_set_irq(void *opaque, int irq, int level)
 
     assert(irq >= GIC_NR_SGIS);
 
-    if (level == GIC_TEST_LEVEL(irq, cm)) {
+    if (level == GIC_DIST_TEST_LEVEL(irq, cm)) {
         return;
     }
 
@@ -399,7 +398,7 @@ static void gic_set_running_irq(GICState *s, int cpu, int irq)
     if (irq == 1023) {
         s->running_priority[cpu] = 0x100;
     } else {
-        s->running_priority[cpu] = GIC_GET_PRIORITY(irq, cpu);
+        s->running_priority[cpu] = GIC_DIST_GET_PRIORITY(irq, cpu);
     }
     gic_update(s);
 }
@@ -443,10 +442,10 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, bool secure)
     bool is_grp0;
 
     irq = s->current_pending[cpu];
-    is_grp0 = GIC_GROUP(irq) == 0;
+    is_grp0 = !GIC_DIST_TEST_GROUP(irq, cm);
 
     if (irq == 1023
-            || GIC_GET_PRIORITY(irq, cpu) >= s->running_priority[cpu]) {
+            || GIC_DIST_GET_PRIORITY(irq, cpu) >= s->running_priority[cpu]) {
         DPRINTF("ACK no pending IRQ\n");
         return 1023;
     }
@@ -467,7 +466,7 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, bool secure)
         /* Clear pending flags for both level and edge triggered interrupts.
          * Level triggered IRQs will be reasserted once they become inactive.
          */
-        GIC_CLEAR_PENDING(irq, GIC_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
+        GIC_DIST_CLEAR_PENDING(irq, GIC_DIST_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
         ret = irq;
     } else {
         if (irq < GIC_NR_SGIS) {
@@ -479,7 +478,7 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, bool secure)
             src = ctz32(s->sgi_pending[irq][cpu]);
             s->sgi_pending[irq][cpu] &= ~(1 << src);
             if (s->sgi_pending[irq][cpu] == 0) {
-                GIC_CLEAR_PENDING(irq, GIC_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
+                GIC_DIST_CLEAR_PENDING(irq, GIC_DIST_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
             }
             ret = irq | ((src & 0x7) << 10);
         } else {
@@ -487,7 +486,7 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, bool secure)
              * interrupts. (level triggered interrupts with an active line
              * remain pending, see gic_test_pending)
              */
-            GIC_CLEAR_PENDING(irq, GIC_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
+            GIC_DIST_CLEAR_PENDING(irq, GIC_DIST_TEST_MODEL(irq) ? ALL_CPU_MASK : cm);
             ret = irq;
         }
     }
@@ -504,7 +503,7 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, bool secure)
     return ret;
 }
 
-void gic_set_priority(GICState *s, int cpu, int irq, uint8_t val)
+void gic_dist_set_priority(GICState *s, int cpu, int irq, uint8_t val)
 {
     if (irq < GIC_INTERNAL) {
         s->priority1[irq][cpu] = val;
@@ -554,10 +553,10 @@ static void gic_complete_irq_force(GICState *s, int cpu, int irq, bool force, bo
     if (s->revision == REV_11MPCORE) {
         /* Mark level triggered interrupts as pending if they are still
            raised.  */
-        if (!GIC_TEST_EDGE_TRIGGER(irq) && GIC_TEST_ENABLED(irq, cm)
-            && GIC_TEST_LEVEL(irq, cm) && (GIC_TARGET(irq) & cm) != 0) {
+        if (!GIC_DIST_TEST_EDGE_TRIGGER(irq) && GIC_DIST_TEST_ENABLED(irq, cm)
+            && GIC_DIST_TEST_LEVEL(irq, cm) && (GIC_DIST_TARGET(irq) & cm) != 0) {
             DPRINTF("Set %d pending mask %x\n", irq, cm);
-            GIC_SET_PENDING(irq, cm);
+            GIC_DIST_SET_PENDING(irq, cm);
             update = 1;
         }
     }
@@ -576,8 +575,8 @@ static void gic_complete_irq_force(GICState *s, int cpu, int irq, bool force, bo
 		s->apr[0][cpu], s->apr[1][cpu], s->apr[2][cpu]);
         while (s->last_active[tmp][cpu] != 1023) {
             if (s->last_active[tmp][cpu] == irq) {
-                if (is_apr(s, cpu, GIC_GET_PRIORITY(s->last_active[tmp][cpu], cpu)))
-	            clear_apr(s, cpu, GIC_GET_PRIORITY(s->last_active[tmp][cpu], cpu));
+                if (is_apr(s, cpu, GIC_DIST_GET_PRIORITY(s->last_active[tmp][cpu], cpu)))
+	            clear_apr(s, cpu, GIC_DIST_GET_PRIORITY(s->last_active[tmp][cpu], cpu));
                 s->last_active[tmp][cpu] = s->last_active[irq][cpu];
                 break;
             }
@@ -712,7 +711,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, bool secure)
             goto bad_reg;
         res = 0;
         for (i = 0; i < 8; i++) {
-            if (GIC_TEST_ENABLED(irq + i, cm)) {
+            if (GIC_DIST_TEST_ENABLED(irq + i, cm)) {
                 res |= (1 << i);
             }
         }
@@ -740,7 +739,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, bool secure)
         res = 0;
         mask = (irq < GIC_INTERNAL) ?  cm : ALL_CPU_MASK;
         for (i = 0; i < 8; i++) {
-            if (GIC_TEST_ACTIVE(irq + i, mask)) {
+            if (GIC_DIST_TEST_ACTIVE(irq + i, mask)) {
                 res |= (1 << i);
             }
         }
@@ -749,7 +748,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, bool secure)
         irq = (offset - 0x400) + GIC_BASE_IRQ;
         if (irq >= s->num_irq)
             goto bad_reg;
-        res = GIC_GET_PRIORITY(irq, cpu);
+        res = GIC_DIST_GET_PRIORITY(irq, cpu);
     } else if (offset < 0xc00) {
         /* Interrupt CPU Target.  */
         if (s->num_cpu == 1 && s->revision != REV_11MPCORE) {
@@ -763,7 +762,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, bool secure)
             if (irq < GIC_INTERNAL) {
                 res = cm;
             } else {
-                res = GIC_TARGET(irq);
+                res = GIC_DIST_TARGET(irq);
             }
         }
     } else if (offset < 0xf00) {
@@ -773,9 +772,9 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, bool secure)
             goto bad_reg;
         res = 0;
         for (i = 0; i < 4; i++) {
-            if (GIC_TEST_MODEL(irq + i))
+            if (GIC_DIST_TEST_MODEL(irq + i))
                 res |= (1 << (i * 2));
-            if (GIC_TEST_EDGE_TRIGGER(irq + i))
+            if (GIC_DIST_TEST_EDGE_TRIGGER(irq + i))
                 res |= (2 << (i * 2));
         }
     } else if (offset < 0xf10) {
@@ -824,20 +823,30 @@ bad_reg:
     return 0;
 }
 
-static uint32_t gic_dist_readw(void *opaque, hwaddr offset, bool secure)
+static MemTxResult gic_dist_read(void *opaque, hwaddr offset, uint64_t *data,
+                                 unsigned size, MemTxAttrs attrs)
 {
-    uint32_t val;
-    val = gic_dist_readb(opaque, offset, secure);
-    val |= gic_dist_readb(opaque, offset + 1, secure) << 8;
-    return val;
-}
+    bool sec = attrs.secure;
+    switch (size) {
+    case 1:
+        *data = gic_dist_readb(opaque, offset, sec);
+        break;
+    case 2:
+        *data = gic_dist_readb(opaque, offset, sec);
+        *data |= gic_dist_readb(opaque, offset + 1, sec) << 8;
+        break;
+    case 4:
+        *data = gic_dist_readb(opaque, offset, sec);
+        *data |= gic_dist_readb(opaque, offset + 1, sec) << 8;
+        *data |= gic_dist_readb(opaque, offset + 2, sec) << 16;
+        *data |= gic_dist_readb(opaque, offset + 3, sec) << 24;
+        break;
+    default:
+        return MEMTX_ERROR;
+    }
 
-static uint32_t gic_dist_readl(void *opaque, hwaddr offset, bool secure)
-{
-    uint32_t val;
-    val = gic_dist_readw(opaque, offset, secure);
-    val |= gic_dist_readw(opaque, offset + 2, secure) << 16;
-    return val;
+    trace_gic_dist_read(offset, size, *data);
+    return MEMTX_OK;
 }
 
 static void gic_dist_writeb(void *opaque, hwaddr offset,
@@ -882,23 +891,23 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         for (i = 0; i < 8; i++) {
             if (value & (1 << i)) {
                 int mask =
-                    (irq < GIC_INTERNAL) ? (1 << cpu) : GIC_TARGET(irq + i);
+                    (irq < GIC_INTERNAL) ? (1 << cpu) : GIC_DIST_TARGET(irq + i);
                 int cm = (irq < GIC_INTERNAL) ? (1 << cpu) : ALL_CPU_MASK;
 
                 if (!s->irq_state[irq + i].group && !secure) {
                     continue;
                 }
 
-                if (!GIC_TEST_ENABLED(irq + i, cm)) {
+                if (!GIC_DIST_TEST_ENABLED(irq + i, cm)) {
                     DPRINTF("Enabled IRQ %d\n", irq + i);
                 }
-                GIC_SET_ENABLED(irq + i, cm);
+                GIC_DIST_SET_ENABLED(irq + i, cm);
                 /* If a raised level triggered IRQ enabled then mark
                    is as pending.  */
-                if (GIC_TEST_LEVEL(irq + i, mask)
-                        && !GIC_TEST_EDGE_TRIGGER(irq + i)) {
+                if (GIC_DIST_TEST_LEVEL(irq + i, mask)
+                        && !GIC_DIST_TEST_EDGE_TRIGGER(irq + i)) {
                     DPRINTF("Set %d pending mask %x\n", irq + i, mask);
-                    GIC_SET_PENDING(irq + i, mask);
+                    GIC_DIST_SET_PENDING(irq + i, mask);
                 }
             }
         }
@@ -919,10 +928,10 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                     continue;
                 }
 
-                if (GIC_TEST_ENABLED(irq + i, cm)) {
+                if (GIC_DIST_TEST_ENABLED(irq + i, cm)) {
                     DPRINTF("Disabled IRQ %d\n", irq + i);
                 }
-                GIC_CLEAR_ENABLED(irq + i, cm);
+                GIC_DIST_CLEAR_ENABLED(irq + i, cm);
             }
         }
     } else if (offset < 0x280) {
@@ -937,7 +946,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
 
         for (i = 0; i < 8; i++) {
             if (value & (1 << i)) {
-                GIC_SET_PENDING(irq + i, GIC_TARGET(irq + i));
+                GIC_DIST_SET_PENDING(irq + i, GIC_DIST_TARGET(irq + i));
             }
         }
     } else if (offset < 0x300) {
@@ -954,7 +963,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                for per-CPU interrupts.  It's unclear whether this is the
                corect behavior.  */
             if (value & (1 << i)) {
-                GIC_CLEAR_PENDING(irq + i, ALL_CPU_MASK);
+                GIC_DIST_CLEAR_PENDING(irq + i, ALL_CPU_MASK);
             }
         }
     } else if (offset < 0x400) {
@@ -966,7 +975,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         if (irq >= s->num_irq)
             goto bad_reg;
         if (s->irq_state[irq].group || secure) {
-            gic_set_priority(s, cpu, irq, value);
+            gic_dist_set_priority(s, cpu, irq, value);
         }
     } else if (offset < 0xc00) {
         /* Interrupt CPU Target. RAZ/WI on uniprocessor GICs, with the
@@ -996,21 +1005,21 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         for (i = 0; i < 4; i++) {
             /* FIXME: This */
             // if (s->security_extn && !attrs.secure &&
-            //     !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
+            //     !GIC_DIST_TEST_GROUP(irq + i, 1 << cpu)) {
             //     continue; /* Ignore Non-secure access of Group0 IRQ */
             // }
 
             if (s->revision == REV_11MPCORE) {
                 if (value & (1 << (i * 2))) {
-                    GIC_SET_MODEL(irq + i);
+                    GIC_DIST_SET_MODEL(irq + i);
                 } else {
-                    GIC_CLEAR_MODEL(irq + i);
+                    GIC_DIST_CLEAR_MODEL(irq + i);
                 }
             }
             if (value & (2 << (i * 2))) {
-                GIC_SET_EDGE_TRIGGER(irq + i);
+                GIC_DIST_SET_EDGE_TRIGGER(irq + i);
             } else {
-                GIC_CLEAR_EDGE_TRIGGER(irq + i);
+                GIC_DIST_CLEAR_EDGE_TRIGGER(irq + i);
             }
         }
     } else if (offset < 0xf10) {
@@ -1025,7 +1034,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
 
         s->sgi_pending[irq][cpu] &= ~value;
         if (s->sgi_pending[irq][cpu] == 0) {
-            GIC_CLEAR_PENDING(irq, 1 << cpu);
+            GIC_DIST_CLEAR_PENDING(irq, 1 << cpu);
         }
     } else if (offset < 0xf30) {
         /* GICD_SPENDSGIRn */
@@ -1034,7 +1043,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         }
         irq = (offset - 0xf20);
 
-        GIC_SET_PENDING(irq, 1 << cpu);
+        GIC_DIST_SET_PENDING(irq, 1 << cpu);
         s->sgi_pending[irq][cpu] |= value;
     } else {
         goto bad_reg;
@@ -1080,7 +1089,7 @@ static void gic_dist_writel(void *opaque, hwaddr offset,
             mask = ALL_CPU_MASK;
             break;
         }
-        GIC_SET_PENDING(irq, mask);
+        GIC_DIST_SET_PENDING(irq, mask);
         target_cpu = ctz32(mask);
         while (target_cpu < GIC_N_REALCPU) {
             s->sgi_pending[irq][target_cpu] |= (1 << cpu);
@@ -1094,51 +1103,26 @@ static void gic_dist_writel(void *opaque, hwaddr offset,
     gic_dist_writew(opaque, offset + 2, value >> 16, secure);
 }
 
-static void gic_dist_access(MemoryTransaction *tr)
+static MemTxResult gic_dist_write(void *opaque, hwaddr offset, uint64_t data,
+                                  unsigned size, MemTxAttrs attrs)
 {
-    bool sec = tr->attr.secure;
-    if (tr->rw) {
-        switch (tr->size) {
-        case 1:
-            gic_dist_writeb(tr->opaque, tr->addr, tr->data.u8, sec);
-            break;
-        case 2:
-            gic_dist_writew(tr->opaque, tr->addr, tr->data.u16, sec);
-            break;
-        case 4:
-            gic_dist_writel(tr->opaque, tr->addr, tr->data.u32, sec);
-            break;
-        }
-    } else {
-        switch (tr->size) {
-        case 1:
-            tr->data.u8 = gic_dist_readb(tr->opaque, tr->addr, sec);
-            break;
-        case 2:
-            tr->data.u16 = gic_dist_readw(tr->opaque, tr->addr, sec);
-            break;
-        case 4:
-            tr->data.u32 = gic_dist_readl(tr->opaque, tr->addr, sec);
-            break;
-        }
-    }
-#if 0
-    qemu_log("GIC sz=%d rw=%d addr=%lx data32=%x secure=%d\n",
-             tr->size, tr->rw, tr->addr, tr->data.u32, sec);
-#endif
-}
+    bool sec = attrs.secure;
+    trace_gic_dist_write(offset, size, data);
 
-static const MemoryRegionOps gic_dist_ops = {
-#if 1
-    .access = gic_dist_access,
-#else
-    .old_mmio = {
-        .read = { gic_dist_readb, gic_dist_readw, gic_dist_readl, },
-        .write = { gic_dist_writeb, gic_dist_writew, gic_dist_writel, },
-    },
-#endif
-    .endianness = DEVICE_NATIVE_ENDIAN,
-};
+    switch (size) {
+    case 1:
+        gic_dist_writeb(opaque, offset, data, sec);
+        return MEMTX_OK;
+    case 2:
+        gic_dist_writew(opaque, offset, data, sec);
+        return MEMTX_OK;
+    case 4:
+        gic_dist_writel(opaque, offset, data, sec);
+        return MEMTX_OK;
+    default:
+        return MEMTX_ERROR;
+    }
+}
 
 #define GICC_ACK_CTL       (1 << 2)
 #define GICC_FIQ_EN        (1 << 3)
@@ -1265,16 +1249,24 @@ static void gic_cpu_write(GICState *s, int cpu, int offset, uint32_t value, bool
     gic_update(s);
 }
 
-static void thiscpu_access(MemoryTransaction *tr)
+/* Wrappers to read/write the GIC CPU interface for the current CPU */
+static MemTxResult gic_thiscpu_read(void *opaque, hwaddr addr, uint64_t *data,
+                                    unsigned size, MemTxAttrs attrs)
 {
-    GICState *s = (GICState *) tr->opaque;
-    bool sec = tr->attr.secure;
-
-    if (tr->rw) {
-        gic_cpu_write(s, gic_get_current_cpu(s), tr->addr, tr->data.u32, sec);
-    } else {
-        tr->data.u32 = gic_cpu_read(s, gic_get_current_cpu(s), tr->addr, sec);
-    }
+    GICState *s = (GICState *)opaque;
+    bool sec = attrs.secure;
+    *data = gic_cpu_read(s, gic_get_current_cpu(s), addr, sec);
+    return MEMTX_OK;
+}
+ 
+static MemTxResult gic_thiscpu_write(void *opaque, hwaddr addr,
+                                     uint64_t value, unsigned size,
+                                     MemTxAttrs attrs)
+{
+    GICState *s = (GICState *)opaque;
+    bool sec = attrs.secure;
+    gic_cpu_write(s, gic_get_current_cpu(s), addr, value, sec);
+    return MEMTX_OK;
 }
 
 static uint32_t gic_hyp_vmcr_read(GICState *s, int vcpu)
@@ -1465,14 +1457,17 @@ static void gic_thisvcpu_write(void *opaque, hwaddr addr,
     gic_cpu_write(s, id, addr, value, false);
 }
 
-static const MemoryRegionOps gic_thiscpu_ops = {
-#if 1
-    .access = thiscpu_access,
-#else
-    .read = gic_thiscpu_read,
-    .write = gic_thiscpu_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
-#endif
+static const MemoryRegionOps gic_ops[2] = {
+    {
+        .read_with_attrs = gic_dist_read,
+        .write_with_attrs = gic_dist_write,
+        .endianness = DEVICE_NATIVE_ENDIAN,
+    },
+    {
+        .read_with_attrs = gic_thiscpu_read,
+        .write_with_attrs = gic_thiscpu_write,
+        .endianness = DEVICE_NATIVE_ENDIAN,
+    }
 };
 
 static const MemoryRegionOps gic_thishyp_ops = {
@@ -1527,7 +1522,7 @@ void gic_init_irqs_and_distributor(GICState *s)
     qdev_init_gpio_out_named(DEVICE(s), s->parent_irq, "irq", GIC_N_REALCPU * 2);
     qdev_init_gpio_out_named(DEVICE(s), s->parent_fiq, "fiq", GIC_N_REALCPU * 2);
     qdev_init_gpio_out_named(DEVICE(s), s->maint, "maint", NUM_CPU(s));
-    memory_region_init_io(&s->iomem, OBJECT(s), &gic_dist_ops, s,
+    memory_region_init_io(&s->iomem, OBJECT(s), &gic_ops[0], s,
                           "gic_dist", 0x1000);
 }
 
@@ -1563,7 +1558,7 @@ static void arm_gic_realize(DeviceState *dev, Error **errp)
      * GIC v2 defines a larger memory region (0x1000) so this will need
      * to be extended when we implement A15.
      */
-    memory_region_init_io(&s->cpuiomem[0], OBJECT(s), &gic_thiscpu_ops, s,
+    memory_region_init_io(&s->cpuiomem[0], OBJECT(s), &gic_ops[1], s,
                           "gic_cpu", s->revision >= 2 ? s->map_stride * 2 : 0x100);
     memory_region_init_io(&s->hypiomem[0], OBJECT(s), &gic_thishyp_ops, s,
                           "gic_thishyp_cpu", 0x200);
@@ -1660,10 +1655,11 @@ static void arm_gic_class_init(ObjectClass *klass, void *data)
     LinuxDeviceClass *ldc = LINUX_DEVICE_CLASS(klass);
 
     agc->irq_handler = gic_set_irq;
+    agc->parent_realize = dc->realize;
+    dc->realize = arm_gic_realize;
     fgic->auto_parent = arm_gic_fdt_auto_parent;
     fggc->client_gpios = arm_gic_client_gpios;
     ldc->linux_init = arm_gic_linux_init;
-    device_class_set_parent_realize(dc, arm_gic_realize, &agc->parent_realize);
 }
 
 static const TypeInfo arm_gic_info = {

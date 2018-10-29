@@ -36,7 +36,7 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
      * and then query that CPU for the relevant ID registers.
      */
     int i, ret, fdarray[3];
-    uint32_t midr, id_pfr0, id_isar0, mvfr1;
+    uint32_t midr, id_pfr0, mvfr1;
     uint64_t features = 0;
     /* Old kernels may not know about the PREFERRED_TARGET ioctl: however
      * we know these will only support creating one kind of guest CPU,
@@ -57,11 +57,6 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
             .id = KVM_REG_ARM | KVM_REG_SIZE_U32
             | ENCODE_CP_REG(15, 0, 0, 0, 1, 0, 0),
             .addr = (uintptr_t)&id_pfr0,
-        },
-        {
-            .id = KVM_REG_ARM | KVM_REG_SIZE_U32
-            | ENCODE_CP_REG(15, 0, 0, 0, 2, 0, 0),
-            .addr = (uintptr_t)&id_isar0,
         },
         {
             .id = KVM_REG_ARM | KVM_REG_SIZE_U32
@@ -98,25 +93,13 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
     /* Now we've retrieved all the register information we can
      * set the feature bits based on the ID register fields.
      * We can assume any KVM supporting CPU is at least a v7
-     * with VFPv3, LPAE and the generic timers; this in turn implies
-     * most of the other feature bits, but a few must be tested.
+     * with VFPv3, virtualization extensions, and the generic
+     * timers; this in turn implies most of the other feature
+     * bits, but a few must be tested.
      */
-    set_feature(&features, ARM_FEATURE_V7);
+    set_feature(&features, ARM_FEATURE_V7VE);
     set_feature(&features, ARM_FEATURE_VFP3);
-    set_feature(&features, ARM_FEATURE_LPAE);
     set_feature(&features, ARM_FEATURE_GENERIC_TIMER);
-
-    switch (extract32(id_isar0, 24, 4)) {
-    case 1:
-        set_feature(&features, ARM_FEATURE_THUMB_DIV);
-        break;
-    case 2:
-        set_feature(&features, ARM_FEATURE_ARM_DIV);
-        set_feature(&features, ARM_FEATURE_THUMB_DIV);
-        break;
-    default:
-        break;
-    }
 
     if (extract32(id_pfr0, 12, 4) == 1) {
         set_feature(&features, ARM_FEATURE_THUMB2EE);
@@ -233,6 +216,9 @@ int kvm_arch_init_vcpu(CPUState *cs)
         return ret;
     }
     cpu->mp_affinity = mpidr & ARM32_AFFINITY_MASK;
+
+    /* Check whether userspace can specify guest syndrome value */
+    kvm_arm_init_serror_injection(cs);
 
     return kvm_arm_init_cpreg_list(cpu);
 }
@@ -375,6 +361,11 @@ int kvm_arch_put_registers(CPUState *cs, int level)
         return ret;
     }
 
+    ret = kvm_put_vcpu_events(cpu);
+    if (ret) {
+        return ret;
+    }
+
     /* Note that we do not call write_cpustate_to_list()
      * here, so we are only writing the tuple list back to
      * KVM. This is safe because nothing can change the
@@ -461,6 +452,11 @@ int kvm_arch_get_registers(CPUState *cs)
         return ret;
     }
     vfp_set_fpscr(env, fpscr);
+
+    ret = kvm_get_vcpu_events(cpu);
+    if (ret) {
+        return ret;
+    }
 
     if (!write_kvmstate_to_list(cpu)) {
         return EINVAL;

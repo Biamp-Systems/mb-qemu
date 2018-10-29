@@ -227,12 +227,7 @@ void altera_juart_create(int uart, const hwaddr addr, qemu_irq irq)
 
     dev = qdev_create(NULL, TYPE_ALTERA_JUART);
 
-    if (uart >= MAX_SERIAL_PORTS) {
-        hw_error("Cannot assign uart %d: QEMU supports only %d ports\n",
-                 uart, MAX_SERIAL_PORTS);
-    }
-
-    chr = serial_hds[uart];
+    chr = serial_hd(uart);
     if (!chr) {
         snprintf(label, ARRAY_SIZE(label), "%s%d", chr_name, uart);
         chr = qemu_chr_new(label, "null");

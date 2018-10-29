@@ -10,6 +10,7 @@
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
 #include "hw/fdt_generic_util.h"
+#include "trace.h"
 
 #define I2C_BROADCAST 0x00
 
@@ -147,14 +148,16 @@ int i2c_start_transfer(I2CBus *bus, uint8_t address, int recv)
     }
 
     QLIST_FOREACH(node, &bus->current_devs, next) {
+        I2CSlave *s = node->elt;
         int rv;
 
-        sc = I2C_SLAVE_GET_CLASS(node->elt);
+        sc = I2C_SLAVE_GET_CLASS(s);
         /* If the bus is already busy, assume this is a repeated
            start condition.  */
 
         if (sc->event) {
-            rv = sc->event(node->elt, recv ? I2C_START_RECV : I2C_START_SEND);
+            trace_i2c_event("start", s->address);
+            rv = sc->event(s, recv ? I2C_START_RECV : I2C_START_SEND);
             if (rv && !bus->broadcast) {
                 if (bus_scanned) {
                     /* First call, terminate the transfer. */
@@ -182,9 +185,11 @@ void i2c_end_transfer(I2CBus *bus)
     }
 
     QLIST_FOREACH_SAFE(node, &bus->current_devs, next, next) {
-        sc = I2C_SLAVE_GET_CLASS(node->elt);
+        I2CSlave *s = node->elt;
+        sc = I2C_SLAVE_GET_CLASS(s);
         if (sc->event) {
-            sc->event(node->elt, I2C_FINISH);
+            trace_i2c_event("finish", s->address);
+            sc->event(s, I2C_FINISH);
         }
         QLIST_REMOVE(node, next);
         g_free(node);
@@ -195,14 +200,17 @@ void i2c_end_transfer(I2CBus *bus)
 int i2c_send_recv(I2CBus *bus, uint8_t *data, bool send)
 {
     I2CSlaveClass *sc;
+    I2CSlave *s;
     I2CNode *node;
     int ret = 0;
 
     if (send) {
         QLIST_FOREACH(node, &bus->current_devs, next) {
-            sc = I2C_SLAVE_GET_CLASS(node->elt);
+            s = node->elt;
+            sc = I2C_SLAVE_GET_CLASS(s);
             if (sc->send) {
-                ret = ret || sc->send(node->elt, *data);
+                trace_i2c_send(s->address, *data);
+                ret = ret || sc->send(s, *data);
             } else {
                 ret = -1;
             }
@@ -215,7 +223,9 @@ int i2c_send_recv(I2CBus *bus, uint8_t *data, bool send)
 
         sc = I2C_SLAVE_GET_CLASS(QLIST_FIRST(&bus->current_devs)->elt);
         if (sc->recv) {
-            ret = sc->recv(QLIST_FIRST(&bus->current_devs)->elt);
+            s = QLIST_FIRST(&bus->current_devs)->elt;
+            ret = sc->recv(s);
+            trace_i2c_recv(s->address, ret);
             if (ret < 0) {
                 return ret;
             } else {
@@ -252,6 +262,7 @@ void i2c_nack(I2CBus *bus)
     QLIST_FOREACH(node, &bus->current_devs, next) {
         sc = I2C_SLAVE_GET_CLASS(node->elt);
         if (sc->event) {
+            trace_i2c_event("nack", node->elt->address);
             sc->event(node->elt, I2C_NACK);
         }
     }
@@ -285,18 +296,6 @@ const VMStateDescription vmstate_i2c_slave = {
         VMSTATE_END_OF_LIST()
     }
 };
-
-static int i2c_slave_qdev_init(DeviceState *dev)
-{
-    I2CSlave *s = I2C_SLAVE(dev);
-    I2CSlaveClass *sc = I2C_SLAVE_GET_CLASS(s);
-
-    if (sc->init) {
-        return sc->init(s);
-    }
-
-    return 0;
-}
 
 DeviceState *i2c_create_slave(I2CBus *bus, const char *name, uint8_t addr)
 {
@@ -336,7 +335,6 @@ static void i2c_slave_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
     FDTGenericMMapClass *fmc = FDT_GENERIC_MMAP_CLASS(klass);
-    k->init = i2c_slave_qdev_init;
     set_bit(DEVICE_CATEGORY_MISC, k->categories);
     k->bus_type = TYPE_I2C_BUS;
     k->props = i2c_props;

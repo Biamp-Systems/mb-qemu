@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include <zlib.h>
 
 #include "qapi/error.h"
@@ -258,6 +259,8 @@ static void qxl_spice_destroy_surfaces(PCIQXLDevice *qxl, qxl_async_io async)
 
 static void qxl_spice_monitors_config_async(PCIQXLDevice *qxl, int replay)
 {
+    QXLMonitorsConfig *cfg;
+
     trace_qxl_spice_monitors_config(qxl->id);
     if (replay) {
         /*
@@ -284,6 +287,16 @@ static void qxl_spice_monitors_config_async(PCIQXLDevice *qxl, int replay)
                 MEMSLOT_GROUP_GUEST,
                 (uintptr_t)qxl_cookie_new(QXL_COOKIE_TYPE_IO,
                                           QXL_IO_MONITORS_CONFIG_ASYNC));
+    }
+
+    cfg = qxl_phys2virt(qxl, qxl->guest_monitors_config, MEMSLOT_GROUP_GUEST);
+    if (cfg != NULL && cfg->count == 1) {
+        qxl->guest_primary.resized = 1;
+        qxl->guest_head0_width  = cfg->heads[0].width;
+        qxl->guest_head0_height = cfg->heads[0].height;
+    } else {
+        qxl->guest_head0_width  = 0;
+        qxl->guest_head0_height = 0;
     }
 }
 
@@ -1880,7 +1893,31 @@ static void qxl_send_events(PCIQXLDevice *d, uint32_t events)
         trace_qxl_send_events_vm_stopped(d->id, events);
         return;
     }
-    old_pending = atomic_fetch_or(&d->ram->int_pending, le_events);
+    /*
+     * Older versions of Spice forgot to define the QXLRam struct
+     * with the '__aligned__(4)' attribute. clang 7 and newer will
+     * thus warn that atomic_fetch_or(&d->ram->int_pending, ...)
+     * might be a misaligned atomic access, and will generate an
+     * out-of-line call for it, which results in a link error since
+     * we don't currently link against libatomic.
+     *
+     * In fact we set up d->ram in init_qxl_ram() so it always starts
+     * at a 4K boundary, so we know that &d->ram->int_pending is
+     * naturally aligned for a uint32_t. Newer Spice versions
+     * (with Spice commit beda5ec7a6848be20c0cac2a9a8ef2a41e8069c1)
+     * will fix the bug directly. To deal with older versions,
+     * we tell the compiler to assume the address really is aligned.
+     * Any compiler which cares about the misalignment will have
+     * __builtin_assume_aligned.
+     */
+#ifdef HAS_ASSUME_ALIGNED
+#define ALIGNED_UINT32_PTR(P) ((uint32_t *)__builtin_assume_aligned(P, 4))
+#else
+#define ALIGNED_UINT32_PTR(P) ((uint32_t *)P)
+#endif
+
+    old_pending = atomic_fetch_or(ALIGNED_UINT32_PTR(&d->ram->int_pending),
+                                  le_events);
     if ((old_pending & le_events) == le_events) {
         return;
     }
@@ -2012,11 +2049,11 @@ static void qxl_init_ramsize(PCIQXLDevice *qxl)
     if (qxl->vgamem_size_mb > 256) {
         qxl->vgamem_size_mb = 256;
     }
-    qxl->vgamem_size = qxl->vgamem_size_mb * 1024 * 1024;
+    qxl->vgamem_size = qxl->vgamem_size_mb * MiB;
 
     /* vga ram (bar 0, total) */
     if (qxl->ram_size_mb != -1) {
-        qxl->vga.vram_size = qxl->ram_size_mb * 1024 * 1024;
+        qxl->vga.vram_size = qxl->ram_size_mb * MiB;
     }
     if (qxl->vga.vram_size < qxl->vgamem_size * 2) {
         qxl->vga.vram_size = qxl->vgamem_size * 2;
@@ -2024,7 +2061,7 @@ static void qxl_init_ramsize(PCIQXLDevice *qxl)
 
     /* vram32 (surfaces, 32bit, bar 1) */
     if (qxl->vram32_size_mb != -1) {
-        qxl->vram32_size = qxl->vram32_size_mb * 1024 * 1024;
+        qxl->vram32_size = qxl->vram32_size_mb * MiB;
     }
     if (qxl->vram32_size < 4096) {
         qxl->vram32_size = 4096;
@@ -2032,7 +2069,7 @@ static void qxl_init_ramsize(PCIQXLDevice *qxl)
 
     /* vram (surfaces, 64bit, bar 4+5) */
     if (qxl->vram_size_mb != -1) {
-        qxl->vram_size = (uint64_t)qxl->vram_size_mb * 1024 * 1024;
+        qxl->vram_size = (uint64_t)qxl->vram_size_mb * MiB;
     }
     if (qxl->vram_size < qxl->vram32_size) {
         qxl->vram_size = qxl->vram32_size;
@@ -2056,7 +2093,6 @@ static void qxl_realize_common(PCIQXLDevice *qxl, Error **errp)
 
     qemu_spice_display_init_common(&qxl->ssd);
     qxl->mode = QXL_MODE_UNDEFINED;
-    qxl->generation = 1;
     qxl->num_memslots = NUM_MEMSLOTS;
     qemu_mutex_init(&qxl->track_lock);
     qemu_mutex_init(&qxl->async_lock);
@@ -2134,13 +2170,12 @@ static void qxl_realize_common(PCIQXLDevice *qxl, Error **errp)
     }
 
     /* print pci bar details */
-    dprint(qxl, 1, "ram/%s: %d MB [region 0]\n",
-           qxl->id == 0 ? "pri" : "sec",
-           qxl->vga.vram_size / (1024*1024));
-    dprint(qxl, 1, "vram/32: %" PRIx64 "d MB [region 1]\n",
-           qxl->vram32_size / (1024*1024));
-    dprint(qxl, 1, "vram/64: %" PRIx64 "d MB %s\n",
-           qxl->vram_size / (1024*1024),
+    dprint(qxl, 1, "ram/%s: %" PRId64 " MB [region 0]\n",
+           qxl->id == 0 ? "pri" : "sec", qxl->vga.vram_size / MiB);
+    dprint(qxl, 1, "vram/32: %" PRIx64 " MB [region 1]\n",
+           qxl->vram32_size / MiB);
+    dprint(qxl, 1, "vram/64: %" PRIx64 " MB %s\n",
+           qxl->vram_size / MiB,
            qxl->vram32_size < qxl->vram_size ? "[region 4]" : "[unmapped]");
 
     qxl->ssd.qxl.base.sif = &qxl_interface.base;
@@ -2167,8 +2202,8 @@ static void qxl_realize_primary(PCIDevice *dev, Error **errp)
     qxl->id = 0;
     qxl_init_ramsize(qxl);
     vga->vbe_size = qxl->vgamem_size;
-    vga->vram_size_mb = qxl->vga.vram_size >> 20;
-    vga_common_init(vga, OBJECT(dev), true);
+    vga->vram_size_mb = qxl->vga.vram_size / MiB;
+    vga_common_init(vga, OBJECT(dev));
     vga_init(vga, OBJECT(dev),
              pci_address_space(dev), pci_address_space_io(dev), false);
     portio_list_init(&qxl->vga_port_list, OBJECT(dev), qxl_vga_portio_list,
@@ -2391,10 +2426,8 @@ static VMStateDescription qxl_vmstate = {
 };
 
 static Property qxl_properties[] = {
-        DEFINE_PROP_UINT32("ram_size", PCIQXLDevice, vga.vram_size,
-                           64 * 1024 * 1024),
-        DEFINE_PROP_UINT64("vram_size", PCIQXLDevice, vram32_size,
-                           64 * 1024 * 1024),
+        DEFINE_PROP_UINT32("ram_size", PCIQXLDevice, vga.vram_size, 64 * MiB),
+        DEFINE_PROP_UINT64("vram_size", PCIQXLDevice, vram32_size, 64 * MiB),
         DEFINE_PROP_UINT32("revision", PCIQXLDevice, revision,
                            QXL_DEFAULT_REVISION),
         DEFINE_PROP_UINT32("debug", PCIQXLDevice, debug, 0),
@@ -2410,6 +2443,7 @@ static Property qxl_properties[] = {
 #endif
         DEFINE_PROP_UINT32("xres", PCIQXLDevice, xres, 0),
         DEFINE_PROP_UINT32("yres", PCIQXLDevice, yres, 0),
+        DEFINE_PROP_BOOL("global-vmstate", PCIQXLDevice, vga.global_vmstate, false),
         DEFINE_PROP_END_OF_LIST(),
 };
 

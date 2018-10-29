@@ -18,17 +18,16 @@
 #include <syslog.h>
 #include <sys/wait.h>
 #endif
-#include "qapi/qmp/json-streamer.h"
 #include "qapi/qmp/json-parser.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qjson.h"
 #include "qapi/qmp/qstring.h"
-#include "qga/guest-agent-core.h"
+#include "guest-agent-core.h"
 #include "qemu/module.h"
 #include "qga-qapi-commands.h"
 #include "qapi/qmp/qerror.h"
 #include "qapi/error.h"
-#include "qga/channel.h"
+#include "channel.h"
 #include "qemu/bswap.h"
 #include "qemu/help_option.h"
 #include "qemu/sockets.h"
@@ -341,46 +340,6 @@ static FILE *ga_open_logfile(const char *logfile)
     return f;
 }
 
-#ifndef _WIN32
-static bool ga_open_pidfile(const char *pidfile)
-{
-    int pidfd;
-    char pidstr[32];
-
-    pidfd = qemu_open(pidfile, O_CREAT|O_WRONLY, S_IRUSR|S_IWUSR);
-    if (pidfd == -1 || lockf(pidfd, F_TLOCK, 0)) {
-        g_critical("Cannot lock pid file, %s", strerror(errno));
-        if (pidfd != -1) {
-            close(pidfd);
-        }
-        return false;
-    }
-
-    if (ftruncate(pidfd, 0)) {
-        g_critical("Failed to truncate pid file");
-        goto fail;
-    }
-    snprintf(pidstr, sizeof(pidstr), "%d\n", getpid());
-    if (write(pidfd, pidstr, strlen(pidstr)) != strlen(pidstr)) {
-        g_critical("Failed to write pid file");
-        goto fail;
-    }
-
-    /* keep pidfile open & locked forever */
-    return true;
-
-fail:
-    unlink(pidfile);
-    close(pidfd);
-    return false;
-}
-#else /* _WIN32 */
-static bool ga_open_pidfile(const char *pidfile)
-{
-    return true;
-}
-#endif
-
 static gint ga_strcmp(gconstpointer str1, gconstpointer str2)
 {
     return strcmp(str1, str2);
@@ -480,8 +439,11 @@ void ga_unset_frozen(GAState *s)
     ga_enable_logging(s);
     g_warning("logging re-enabled due to filesystem unfreeze");
     if (s->deferred_options.pid_filepath) {
-        if (!ga_open_pidfile(s->deferred_options.pid_filepath)) {
-            g_warning("failed to create/open pid file");
+        Error *err = NULL;
+
+        if (!qemu_write_pidfile(s->deferred_options.pid_filepath, &err)) {
+            g_warning("%s", error_get_pretty(err));
+            error_free(err);
         }
         s->deferred_options.pid_filepath = NULL;
     }
@@ -516,8 +478,11 @@ static void become_daemon(const char *pidfile)
     }
 
     if (pidfile) {
-        if (!ga_open_pidfile(pidfile)) {
-            g_critical("failed to create pidfile");
+        Error *err = NULL;
+
+        if (!qemu_write_pidfile(pidfile, &err)) {
+            g_critical("%s", error_get_pretty(err));
+            error_free(err);
             exit(EXIT_FAILURE);
         }
     }
@@ -545,7 +510,7 @@ fail:
 #endif
 }
 
-static int send_response(GAState *s, QObject *payload)
+static int send_response(GAState *s, QDict *payload)
 {
     const char *buf;
     QString *payload_qstr, *response_qstr;
@@ -553,7 +518,7 @@ static int send_response(GAState *s, QObject *payload)
 
     g_assert(payload && s->channel);
 
-    payload_qstr = qobject_to_json(payload);
+    payload_qstr = qobject_to_json(QOBJECT(payload));
     if (!payload_qstr) {
         return -EINVAL;
     }
@@ -563,7 +528,7 @@ static int send_response(GAState *s, QObject *payload)
         response_qstr = qstring_new();
         qstring_append_chr(response_qstr, QGA_SENTINEL_BYTE);
         qstring_append(response_qstr, qstring_get_str(payload_qstr));
-        QDECREF(payload_qstr);
+        qobject_unref(payload_qstr);
     } else {
         response_qstr = payload_qstr;
     }
@@ -571,7 +536,7 @@ static int send_response(GAState *s, QObject *payload)
     qstring_append_chr(response_qstr, '\n');
     buf = qstring_get_str(response_qstr);
     status = ga_channel_write_all(s->channel, buf, strlen(buf));
-    QDECREF(response_qstr);
+    qobject_unref(response_qstr);
     if (status != G_IO_STATUS_NORMAL) {
         return -EIO;
     }
@@ -581,65 +546,57 @@ static int send_response(GAState *s, QObject *payload)
 
 static void process_command(GAState *s, QDict *req)
 {
-    QObject *rsp = NULL;
+    QDict *rsp;
     int ret;
 
     g_assert(req);
     g_debug("processing command");
-    rsp = qmp_dispatch(&ga_commands, QOBJECT(req));
+    rsp = qmp_dispatch(&ga_commands, QOBJECT(req), false);
     if (rsp) {
         ret = send_response(s, rsp);
         if (ret < 0) {
             g_warning("error sending response: %s", strerror(-ret));
         }
-        qobject_decref(rsp);
+        qobject_unref(rsp);
     }
 }
 
 /* handle requests/control events coming in over the channel */
-static void process_event(JSONMessageParser *parser, GQueue *tokens)
+static void process_event(void *opaque, QObject *obj, Error *err)
 {
-    GAState *s = container_of(parser, GAState, parser);
-    QDict *qdict;
-    Error *err = NULL;
+    GAState *s = opaque;
+    QDict *req, *rsp;
     int ret;
 
-    g_assert(s && parser);
-
     g_debug("process_event: called");
-    qdict = qobject_to(QDict, json_parser_parse_err(tokens, NULL, &err));
-    if (err || !qdict) {
-        QDECREF(qdict);
-        qdict = qdict_new();
-        if (!err) {
-            g_warning("failed to parse event: unknown error");
-            error_setg(&err, QERR_JSON_PARSING);
-        } else {
-            g_warning("failed to parse event: %s", error_get_pretty(err));
-        }
-        qdict_put_obj(qdict, "error", qmp_build_error_object(err));
-        error_free(err);
+    assert(!obj != !err);
+    if (err) {
+        goto err;
+    }
+    req = qobject_to(QDict, obj);
+    if (!req) {
+        error_setg(&err, "Input must be a JSON object");
+        goto err;
+    }
+    if (!qdict_haskey(req, "execute")) {
+        g_warning("unrecognized payload format");
+        error_setg(&err, QERR_UNSUPPORTED);
+        goto err;
     }
 
-    /* handle host->guest commands */
-    if (qdict_haskey(qdict, "execute")) {
-        process_command(s, qdict);
-    } else {
-        if (!qdict_haskey(qdict, "error")) {
-            QDECREF(qdict);
-            qdict = qdict_new();
-            g_warning("unrecognized payload format");
-            error_setg(&err, QERR_UNSUPPORTED);
-            qdict_put_obj(qdict, "error", qmp_build_error_object(err));
-            error_free(err);
-        }
-        ret = send_response(s, QOBJECT(qdict));
-        if (ret < 0) {
-            g_warning("error sending error response: %s", strerror(-ret));
-        }
-    }
+    process_command(s, req);
+    qobject_unref(obj);
+    return;
 
-    QDECREF(qdict);
+err:
+    g_warning("failed to parse event: %s", error_get_pretty(err));
+    rsp = qmp_error_response(err);
+    ret = send_response(s, rsp);
+    if (ret < 0) {
+        g_warning("error sending error response: %s", strerror(-ret));
+    }
+    qobject_unref(rsp);
+    qobject_unref(obj);
 }
 
 /* false return signals GAChannel to close the current client connection */
@@ -1324,7 +1281,7 @@ static int run_agent(GAState *s, GAConfig *config, int socket_activation)
     s->command_state = ga_command_state_new();
     ga_command_state_init(s, s->command_state);
     ga_command_state_init_all(s->command_state);
-    json_message_parser_init(&s->parser, process_event);
+    json_message_parser_init(&s->parser, process_event, s, NULL);
 
 #ifndef _WIN32
     if (!register_signal_handlers()) {

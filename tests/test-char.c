@@ -56,7 +56,6 @@ static void fe_event(void *opaque, int event)
     }
 }
 
-#ifdef CONFIG_HAS_GLIB_SUBPROCESS_TESTS
 #ifdef _WIN32
 static void char_console_test_subprocess(void)
 {
@@ -106,7 +105,6 @@ static void char_stdio_test(void)
     g_test_trap_assert_passed();
     g_test_trap_assert_stdout("buf");
 }
-#endif
 
 static void char_ringbuf_test(void)
 {
@@ -214,6 +212,10 @@ static void char_mux_test(void)
     g_assert_cmpint(h2.last_event, ==, -1);
 
     /* switch focus */
+    qemu_chr_be_write(base, (void *)"\1b", 2);
+    g_assert_cmpint(h1.last_event, ==, 42);
+    g_assert_cmpint(h2.last_event, ==, CHR_EVENT_BREAK);
+
     qemu_chr_be_write(base, (void *)"\1c", 2);
     g_assert_cmpint(h1.last_event, ==, CHR_EVENT_MUX_IN);
     g_assert_cmpint(h2.last_event, ==, CHR_EVENT_MUX_OUT);
@@ -226,6 +228,10 @@ static void char_mux_test(void)
     g_assert_cmpint(h1.read_count, ==, 6);
     g_assert_cmpstr(h1.read_buf, ==, "hello");
     h1.read_count = 0;
+
+    qemu_chr_be_write(base, (void *)"\1b", 2);
+    g_assert_cmpint(h1.last_event, ==, CHR_EVENT_BREAK);
+    g_assert_cmpint(h2.last_event, ==, CHR_EVENT_MUX_OUT);
 
     /* remove first handler */
     qemu_chr_fe_set_handlers(&chr_be1, NULL, NULL, NULL, NULL,
@@ -301,7 +307,7 @@ static int socket_can_read_hello(void *opaque)
     return 10;
 }
 
-static void char_socket_test_common(Chardev *chr)
+static void char_socket_test_common(Chardev *chr, bool reconnect)
 {
     Chardev *chr_client;
     QObject *addr;
@@ -321,8 +327,9 @@ static void char_socket_test_common(Chardev *chr)
     addr = object_property_get_qobject(OBJECT(chr), "addr", &error_abort);
     qdict = qobject_to(QDict, addr);
     port = qdict_get_str(qdict, "port");
-    tmp = g_strdup_printf("tcp:127.0.0.1:%s", port);
-    QDECREF(qdict);
+    tmp = g_strdup_printf("tcp:127.0.0.1:%s%s", port,
+                          reconnect ? ",reconnect=1" : "");
+    qobject_unref(qdict);
 
     qemu_chr_fe_init(&be, chr, &error_abort);
     qemu_chr_fe_set_handlers(&be, socket_can_read, socket_read,
@@ -341,6 +348,12 @@ static void char_socket_test_common(Chardev *chr)
     g_assert_cmpint(id, >, 0);
     main_loop();
 
+    d.chr = chr_client;
+    id = g_idle_add(char_socket_test_idle, &d);
+    g_source_set_name_by_id(id, "test-idle");
+    g_assert_cmpint(id, >, 0);
+    main_loop();
+
     g_assert(object_property_get_bool(OBJECT(chr), "connected", &error_abort));
     g_assert(object_property_get_bool(OBJECT(chr_client),
                                       "connected", &error_abort));
@@ -350,6 +363,7 @@ static void char_socket_test_common(Chardev *chr)
 
     object_unparent(OBJECT(chr_client));
 
+    d.chr = chr;
     d.conn_expected = false;
     g_idle_add(char_socket_test_idle, &d);
     main_loop();
@@ -362,7 +376,15 @@ static void char_socket_basic_test(void)
 {
     Chardev *chr = qemu_chr_new("server", "tcp:127.0.0.1:0,server,nowait");
 
-    char_socket_test_common(chr);
+    char_socket_test_common(chr, false);
+}
+
+
+static void char_socket_reconnect_test(void)
+{
+    Chardev *chr = qemu_chr_new("server", "tcp:127.0.0.1:0,server,nowait");
+
+    char_socket_test_common(chr, true);
 }
 
 
@@ -394,7 +416,7 @@ static void char_socket_fdpass_test(void)
 
     qemu_opts_del(opts);
 
-    char_socket_test_common(chr);
+    char_socket_test_common(chr, false);
 }
 
 
@@ -799,14 +821,12 @@ int main(int argc, char **argv)
     g_test_add_func("/char/invalid", char_invalid_test);
     g_test_add_func("/char/ringbuf", char_ringbuf_test);
     g_test_add_func("/char/mux", char_mux_test);
-#ifdef CONFIG_HAS_GLIB_SUBPROCESS_TESTS
 #ifdef _WIN32
     g_test_add_func("/char/console/subprocess", char_console_test_subprocess);
     g_test_add_func("/char/console", char_console_test);
 #endif
     g_test_add_func("/char/stdio/subprocess", char_stdio_test_subprocess);
     g_test_add_func("/char/stdio", char_stdio_test);
-#endif
 #ifndef _WIN32
     g_test_add_func("/char/pipe", char_pipe_test);
 #endif
@@ -815,6 +835,7 @@ int main(int argc, char **argv)
     g_test_add_func("/char/file-fifo", char_file_fifo_test);
 #endif
     g_test_add_func("/char/socket/basic", char_socket_basic_test);
+    g_test_add_func("/char/socket/reconnect", char_socket_reconnect_test);
     g_test_add_func("/char/socket/fdpass", char_socket_fdpass_test);
     g_test_add_func("/char/udp", char_udp_test);
 #ifdef HAVE_CHARDEV_SERIAL

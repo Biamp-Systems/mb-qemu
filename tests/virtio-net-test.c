@@ -173,7 +173,7 @@ static void rx_stop_cont_test(QVirtioDevice *dev,
     qvirtqueue_kick(dev, vq, free_head);
 
     rsp = qmp("{ 'execute' : 'stop'}");
-    QDECREF(rsp);
+    qobject_unref(rsp);
 
     ret = iov_send(socket, iov, 2, 0, sizeof(len) + sizeof(test));
     g_assert_cmpint(ret, ==, sizeof(test) + sizeof(len));
@@ -182,9 +182,9 @@ static void rx_stop_cont_test(QVirtioDevice *dev,
      * ensure the packet data gets queued in QEMU, before we do 'cont'.
      */
     rsp = qmp("{ 'execute' : 'query-status'}");
-    QDECREF(rsp);
+    qobject_unref(rsp);
     rsp = qmp("{ 'execute' : 'cont'}");
-    QDECREF(rsp);
+    qobject_unref(rsp);
 
     qvirtio_wait_used_elem(dev, vq, free_head, NULL, QVIRTIO_NET_TIMEOUT_US);
     memread(req_addr + VNET_HDR_SIZE, buffer, sizeof(test));
@@ -249,7 +249,8 @@ static void hotplug(void)
 
     qtest_start("-device virtio-net-pci");
 
-    qpci_plug_device_test("virtio-net-pci", "net1", PCI_SLOT_HP, NULL);
+    qtest_qmp_device_add("virtio-net-pci", "net1",
+                         "{'addr': %s}", stringify(PCI_SLOT_HP));
 
     if (strcmp(arch, "i386") == 0 || strcmp(arch, "x86_64") == 0) {
         qpci_unplug_acpi_device_test("net1", PCI_SLOT_HP);

@@ -44,6 +44,7 @@ static inline bool qemu_log_separate(void)
 #define CPU_LOG_PAGE       (1 << 14)
 /* LOG_TRACE (1 << 15) is defined in log-for-trace.h */
 #define CPU_LOG_TB_OP_IND  (1 << 16)
+#define CPU_LOG_TB_FPU     (1 << 17)
 
 /* device entries */
 #define DEV_LOG_NET_DEV    (1 << 18)

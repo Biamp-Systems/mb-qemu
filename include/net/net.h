@@ -37,7 +37,6 @@ typedef struct NICConf {
 
 #define DEFINE_NIC_PROPERTIES(_state, _conf)                            \
     DEFINE_PROP_MACADDR("mac",   _state, _conf.macaddr),                \
-    DEFINE_PROP_VLAN("vlan",     _state, _conf.peers),                   \
     DEFINE_PROP_NETDEV("netdev", _state, _conf.peers)
 
 
@@ -202,9 +201,6 @@ extern NICInfo nd_table[MAX_NICS];
 extern const char *host_net_devices[];
 
 /* from net.c */
-extern const char *legacy_tftp_prefix;
-extern const char *legacy_bootp_filename;
-
 int net_client_parse(QemuOptsList *opts_list, const char *str);
 int net_init_clients(Error **errp);
 void net_check_clients(void);

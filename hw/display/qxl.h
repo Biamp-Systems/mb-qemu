@@ -43,7 +43,6 @@ typedef struct PCIQXLDevice {
 
     enum qxl_mode      mode;
     uint32_t           cmdflags;
-    int                generation;
     uint32_t           revision;
 
     int32_t            num_memslots;
@@ -79,6 +78,8 @@ typedef struct PCIQXLDevice {
     QXLPHYSICAL        guest_cursor;
 
     QXLPHYSICAL        guest_monitors_config;
+    uint32_t           guest_head0_width;
+    uint32_t           guest_head0_height;
 
     QemuMutex          track_lock;
 

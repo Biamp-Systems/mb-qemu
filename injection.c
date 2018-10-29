@@ -152,7 +152,7 @@ static void do_fault(void *opaque)
         if (entry->time_ns < current_time) {
             DPRINTF("fault %"PRId64" happened @%"PRId64"!\n", entry->val,
                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
-            qapi_event_send_fault_event(entry->val, current_time, &error_abort);
+            qapi_event_send_fault_event(entry->val, current_time);
             QLIST_REMOVE(entry, node);
             g_free(entry);
             vm_stop_from_timer(RUN_STATE_DEBUG);

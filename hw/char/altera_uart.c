@@ -182,7 +182,7 @@ static void altera_uart_realize(DeviceState *dev, Error **errp)
     AlteraUART *s = ALTERA_UART(dev);
 
     if (!s->chr.chr) {
-        qemu_chr_fe_init(&s->chr, serial_hds[0], &error_abort);
+        qemu_chr_fe_init(&s->chr, serial_hd(0), &error_abort);
     }
 
     qemu_chr_fe_set_handlers(&s->chr, uart_can_rx, uart_rx,
